@@ -266,6 +266,10 @@ class DebateGraph:
             "Do NOT create montage summaries or stitch disconnected windows.\n"
             "- Clip duration: Sum of segments in each clip MUST be between 30.0 and 48.0 seconds (target ~40s; strictly NEVER exceed 48.0s).\n"
             "- Hook: First segment must start on a high-arousal/energy statement.\n"
+            "- Multi-Layout Framing (layout_mode per segment):\n"
+            "  * SPLIT_STACK: Assign whenever a human speaker is actively interacting with, reacting to, or discussing an on-screen display, game, software UI, or secondary subject (e.g. tech reviews, gaming, reaction streams, tutorials).\n"
+            "  * SPEAKER_SOLO: Assign when a single speaker is addressing the camera directly with no relevant visual display (e.g. stand-up comedy, monologue, single interview).\n"
+            "  * CONTENT_FIT: Assign when the focal point is a full-screen graphic, slide, newspaper article, or diagram where horizontal text must remain 100% readable.\n"
             "- Focal Target: For every segment, assign focal_target from: SPEAKER_PRIMARY (someone speaking), "
             "SPEAKER_REACTION (listener reacting), FOCAL_DISPLAY (on-screen UI/game/monitor/phone/tablet), "
             "HELD_OBJECT (hands holding item), ACTION_SCENE (dynamic wide scene)."
@@ -277,6 +281,7 @@ class DebateGraph:
             f"{critique_context}\n\n"
             "Return JSON matching this schema:\n"
             "{\"clips\": [{\"segments\": [{\"segment_start\": float, \"segment_end\": float, "
+            "\"layout_mode\": \"SPEAKER_SOLO\"|\"SPLIT_STACK\"|\"CONTENT_FIT\", "
             "\"focal_target\": \"SPEAKER_PRIMARY\"|\"SPEAKER_REACTION\"|\"FOCAL_DISPLAY\"|\"HELD_OBJECT\"|\"ACTION_SCENE\", "
             "\"emphasis_zoom\": bool}], "
             "\"hook_score\": float, \"retention_score\": float, \"cta_present\": bool, "
@@ -304,6 +309,8 @@ class DebateGraph:
                 segs_data = c.get("segments", [])
                 segs = []
                 VALID_FOCAL_TARGETS = {"SPEAKER_PRIMARY", "SPEAKER_REACTION", "FOCAL_DISPLAY", "HELD_OBJECT", "ACTION_SCENE"}
+                VALID_LAYOUT_MODES = {"SPEAKER_SOLO", "SPLIT_STACK", "CONTENT_FIT"}
+
                 for s in segs_data:
                     raw_focal = str(s.get("focal_target", "SPEAKER_PRIMARY")).upper()
                     # Backwards-compat: remap legacy MONITOR_SCREEN → FOCAL_DISPLAY
@@ -311,11 +318,28 @@ class DebateGraph:
                         raw_focal = "FOCAL_DISPLAY"
                     if raw_focal not in VALID_FOCAL_TARGETS:
                         raw_focal = "SPEAKER_PRIMARY"
+
+                    raw_layout = str(s.get("layout_mode", "")).upper().strip()
+                    if raw_layout in ("SPLIT_STACK", "SPLIT_SCREEN"):
+                        norm_layout = "SPLIT_STACK"
+                    elif raw_layout in ("CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
+                        norm_layout = "CONTENT_FIT"
+                    elif raw_layout in ("SPEAKER_SOLO", "SPEAKER_FULL"):
+                        norm_layout = "SPEAKER_SOLO"
+                    else:
+                        # Infer intelligent default from focal_target
+                        if raw_focal in ("FOCAL_DISPLAY", "HELD_OBJECT"):
+                            norm_layout = "SPLIT_STACK"
+                        elif raw_focal == "ACTION_SCENE":
+                            norm_layout = "CONTENT_FIT"
+                        else:
+                            norm_layout = "SPEAKER_SOLO"
+
                     segs.append(VideoSegment(
                         segment_start=float(s.get("segment_start", 0.0)),
                         segment_end=float(s.get("segment_end", 30.0)),
                         target_track_id=int(s.get("target_track_id", 0)),
-                        layout_mode=str(s.get("layout_mode", "speaker_full")),
+                        layout_mode=norm_layout,
                         focal_target=raw_focal,
                         camera_target=str(s.get("camera_target", "SPEAKER_FACE")),
                         emphasis_zoom=bool(s.get("emphasis_zoom", False))
@@ -323,11 +347,13 @@ class DebateGraph:
                 # Enforce chronological segment sorting
                 segs = sorted(segs, key=lambda s: s.segment_start)
                 
-                # Keyword Intercept Gate — override focal_target based on transcript content
+                # Keyword Intercept Gate — assign appropriate focal_target & layout_mode
                 held_object_keywords = {"screws", "unscrew", "keyboard", "numpad", "battery",
                                         "motherboard", "power brick", "holding", "hands", "fingerprint"}
                 focal_display_keywords = {"display", "monitor", "screen", "game", "laptop",
-                                          "desktop", "UI", "interface", "ports", "inside"}
+                                          "desktop", "ui", "interface", "ports", "inside"}
+                content_fit_keywords = {"slide", "document", "article", "wikipedia", "diagram",
+                                        "chart", "graphic", "whitepaper", "infographic"}
 
                 ft = fused_timeline if isinstance(fused_timeline, dict) else (
                     fused_timeline.model_dump() if hasattr(fused_timeline, "model_dump") else {}
@@ -341,11 +367,14 @@ class DebateGraph:
                             w = str(get_item_field(entry, "word", "")).lower().strip(".,!?\"'")
                             if w in held_object_keywords:
                                 s.focal_target = "HELD_OBJECT"
-                                s.layout_mode = "speaker_full"
+                                s.layout_mode = "SPLIT_STACK"
                                 break
                             elif w in focal_display_keywords:
                                 s.focal_target = "FOCAL_DISPLAY"
-                                s.layout_mode = "speaker_full"
+                                s.layout_mode = "SPLIT_STACK"
+                                break
+                            elif w in content_fit_keywords:
+                                s.layout_mode = "CONTENT_FIT"
                                 break
 
                 clips.append(ClipManifest(
@@ -553,17 +582,14 @@ class DebateGraph:
                     layout_mode = getattr(seg, "layout_mode", "speaker_full") if hasattr(seg, "layout_mode") else seg.get("layout_mode", "speaker_full")
                     seg_dur = seg_end - seg_start
                     
-                    if layout_mode == "split_screen":
-                        continuous_split_duration += seg_dur
-                        if continuous_split_duration > 15.0:
-                            rejection_reason = (
-                                f"REJECTED: Clip {clip_idx + 1} uses 'split_screen' continuously for >15.0s "
-                                f"({continuous_split_duration:.1f}s). You MUST use full-frame cuts for primary object demonstrations "
-                                f"to avoid split-screen fatigue."
-                            )
-                            break
+                    # Normalize layout mode in director check
+                    norm_layout = str(layout_mode).upper().strip()
+                    if norm_layout in ("SPLIT_STACK", "SPLIT_SCREEN"):
+                        norm_layout = "SPLIT_STACK"
+                    elif norm_layout in ("CONTENT_FIT", "BROLL", "GRAPHIC"):
+                        norm_layout = "CONTENT_FIT"
                     else:
-                        continuous_split_duration = 0.0
+                        norm_layout = "SPEAKER_SOLO"
                         
                     if camera_target == "SPEAKER_FACE":
                         continuous_face_duration += seg_dur

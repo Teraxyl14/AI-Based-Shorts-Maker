@@ -167,14 +167,17 @@ def _extract_poi_for_focal_target(spatial_events: List[Any],
         include = False
         weight = 1.0
 
+        target_cy = cy
         if focal_target in ("SPEAKER_PRIMARY", "SPEAKER_REACTION"):
             # Only face and person detections
             if label in FACE_LABELS:
                 include = True
-                weight = 0.70 * confidence
+                weight = 0.85 * confidence
             elif label in PERSON_LABELS:
                 include = True
-                weight = 0.25 * confidence
+                weight = 0.35 * confidence
+                # Head/face is located in the upper portion of the person bounding box
+                target_cy = max(0.08, cy - 0.32 * h)
         elif focal_target == "FOCAL_DISPLAY":
             if label in FOCAL_DISPLAY_LABELS:
                 include = True
@@ -203,7 +206,7 @@ def _extract_poi_for_focal_target(spatial_events: List[Any],
         if include:
             if frame_idx not in frame_boxes:
                 frame_boxes[frame_idx] = []
-            frame_boxes[frame_idx].append((cx, cy, weight))
+            frame_boxes[frame_idx].append((cx, target_cy, weight))
 
     # Weighted centroid per frame
     for frame_idx, boxes in frame_boxes.items():
@@ -304,30 +307,34 @@ def _rts_kalman_smooth(data: np.ndarray) -> np.ndarray:
 def smooth_trajectory(raw_poi: np.ndarray,
                       scene_cuts: List[int],
                       crop_ratio: float = 9.0 / 16.0,
-                      total_frames: Optional[int] = None) -> np.ndarray:
-    """Applies shot-aware 1D horizontal global trajectory smoothing.
+                      total_frames: Optional[int] = None,
+                      lock_cy: bool = True) -> np.ndarray:
+    """Smoothes raw POI coordinates per shot using Savitzky-Golay or RTS Kalman.
 
-    Full-Height Geometric Lock:
-        - Vertical crop center (cy) is STRICTLY locked to 0.5 (full source height ch = 1.0).
-        - Horizontal crop center (cx) is smoothed via Savitzky-Golay / RTS Kalman
-          and clamped to max frame-to-frame velocity <= 0.008 * W_src (~15px/frame).
-        - Canvas boundary clamp ensures the 607.5px (cw = 0.3164) window stays within [0, 1920].
+    Enforces:
+        - Teleport (instant jump) across scene cut boundaries.
+        - Fixed 9:16 crop width window clamping: cx in [cw/2, 1 - cw/2].
+        - 1D horizontal velocity clamping: <= 0.008 * W_src per tick.
+        - Full-height lock: cy = 0.5 when lock_cy=True, or smoothed cy when lock_cy=False.
 
     Args:
-        raw_poi: [T, 2] array of raw fused POI coordinates (normalized).
-        scene_cuts: Frame indices of detected scene cuts.
-        crop_ratio: Width/height ratio of the crop window (default 9:16).
+        raw_poi: np.ndarray of shape [T, 2] with raw (cx, cy) per frame.
+        scene_cuts: Frame indices where scene transitions occur.
         total_frames: Total frame count (defaults to len(raw_poi)).
+        lock_cy: When True, locks cy = 0.5 (full frame height). When False, smooths cy for 2D framing.
 
     Returns:
-        np.ndarray [T, 2] — globally smoothed crop center path with cy = 0.5 locked.
+        np.ndarray [T, 2] — globally smoothed crop center path.
     """
     if total_frames is None:
         total_frames = len(raw_poi)
 
     smoothed = np.zeros((total_frames, 2), dtype=np.float64)
-    # Strict Full-Height Lock: cy is always locked to 0.5 (full frame height)
-    smoothed[:, 1] = 0.5
+    if lock_cy:
+        # Strict Full-Height Lock: cy is always locked to 0.5 (full frame height)
+        smoothed[:, 1] = 0.5
+    else:
+        smoothed[:, 1] = raw_poi[:, 1].copy()
 
     shots = _identify_shot_boundaries(scene_cuts, total_frames)
 
@@ -335,23 +342,33 @@ def smooth_trajectory(raw_poi: np.ndarray,
         shot_len = shot_end - shot_start
         if shot_len < 2:
             smoothed[shot_start:shot_end, 0] = raw_poi[shot_start:shot_end, 0]
+            if not lock_cy:
+                smoothed[shot_start:shot_end, 1] = raw_poi[shot_start:shot_end, 1]
             continue
 
         shot_cx = raw_poi[shot_start:shot_end, 0]
 
         if shot_len < 300:
             smoothed[shot_start:shot_end, 0] = _savgol_smooth(shot_cx)
+            if not lock_cy:
+                smoothed[shot_start:shot_end, 1] = _savgol_smooth(raw_poi[shot_start:shot_end, 1])
         else:
             smoothed[shot_start:shot_end, 0] = _rts_kalman_smooth(shot_cx)
+            if not lock_cy:
+                smoothed[shot_start:shot_end, 1] = _rts_kalman_smooth(raw_poi[shot_start:shot_end, 1])
 
         # Force teleport at the first frame of the shot
         smoothed[shot_start, 0] = raw_poi[shot_start, 0]
+        if not lock_cy:
+            smoothed[shot_start, 1] = raw_poi[shot_start, 1]
 
     # Fixed 9:16 Width Window (cw = 0.31640625 for 16:9 source)
     cw = 0.31640625
     margin_x = cw / 2.0
 
     smoothed[:, 0] = np.clip(smoothed[:, 0], margin_x, 1.0 - margin_x)
+    if not lock_cy:
+        smoothed[:, 1] = np.clip(smoothed[:, 1], 0.20, 0.80)
 
     # 1D Horizontal Pan Velocity Clamping (<= 0.008 * W_src per tick)
     scene_cut_set = set(scene_cuts)
@@ -368,10 +385,11 @@ def smooth_trajectory(raw_poi: np.ndarray,
 
 def compute_crop_path(spatial_events: List[Any],
                       scene_changes: List[Any],
-                      fps: float,
-                      total_frames: int,
+                      fps: float = 30.0,
+                      total_frames: int = 0,
                       crop_ratio: float = 9.0 / 16.0,
-                      focal_targets: Optional[List[Tuple[int, int, str]]] = None) -> np.ndarray:
+                      focal_targets: Optional[List[Tuple[int, int, str]]] = None,
+                      lock_cy: bool = True) -> np.ndarray:
     """Top-level API: computes the full pre-rendered crop path for a clip.
 
     Args:
@@ -417,7 +435,7 @@ def compute_crop_path(spatial_events: List[Any],
     else:
         raw_poi = _extract_poi_from_spatial_events(spatial_events, fps, total_frames)
 
-    smoothed = smooth_trajectory(raw_poi, scene_cut_frames, crop_ratio, total_frames)
+    smoothed = smooth_trajectory(raw_poi, scene_cut_frames, total_frames=total_frames, lock_cy=lock_cy)
 
     logger.info(f"Computed global crop path: {total_frames} frames, "
                 f"{len(scene_cut_frames)} scene cuts, "

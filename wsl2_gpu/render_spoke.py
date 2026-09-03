@@ -35,43 +35,171 @@ RING_BUFFER_SIZE = 8  # Pre-allocated frame slots in the ring buffer
 
 # ─── GPU-Resident Layout Helpers ─────────────────────────────────────────────
 
-def render_broll_pillarbox(source_tensor: torch.Tensor, target_canvas_shape: tuple) -> torch.Tensor:
-    """
-    Renders B-roll/graphic assets with a down-scaled heavy Kornia Gaussian blur background
-    and an un-cropped FIT-scaled foreground.
-    source_tensor shape: [1, C, H, W]
-    target_canvas_shape: (H, W) -> e.g., (1920, 1080)
-    Returns: [H, W, 3] RGB byte tensor
-    """
-    B, C, src_h, src_w = source_tensor.shape
-    tgt_h, tgt_w = target_canvas_shape
+# ─── GPU-Resident Multi-Layout Framing Helpers ──────────────────────────────
 
-    # Layer 1: Background
-    scale_factor = tgt_h / src_h
+def render_speaker_solo(frame: torch.Tensor, cx_norm: float,
+                        target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
+    """BRANCH A — SPEAKER_SOLO (Full 9:16 Portrait):
+    - Crop full source height (ch = 1.0, H = 1080) and width cw = 0.3164 (607.5px).
+    - Center horizontally on the smoothed speaker POI (cx_norm).
+    - Scale to 1080 x 1920 via bilinear interpolation.
+    Returns: [1, 3, target_h, target_w] float32 tensor in [0, 1].
+    """
+    B, C, src_h, src_w = frame.shape
+    crop_h = float(src_h)
+    crop_w = float(src_h) * (float(target_w) / float(target_h))  # 607.5px for 1080p
+
+    x_center = cx_norm * float(src_w)
+    x0_val = x_center - (crop_w / 2.0)
+    x0 = max(0, min(int(src_w - crop_w), int(round(x0_val))))
+    x1 = int(round(x0 + crop_w))
+    y0 = 0
+    y1 = src_h
+
+    cropped = frame[:, :, y0:y1, x0:x1]
+    resized = torch.nn.functional.interpolate(
+        cropped, size=(target_h, target_w), mode='bilinear', align_corners=False
+    )
+    return resized
+
+
+def render_split_stack(frame: torch.Tensor, cx_norm: float, cy_norm: float,
+                       speaker_cx: Optional[float] = None,
+                       speaker_cy: Optional[float] = None,
+                       focal_target: str = "FOCAL_DISPLAY",
+                       target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
+    """BRANCH B — SPLIT_STACK (Vertical Stack 50/50):
+    - Canvas is divided into Top (Y: 0 -> 960) and Bottom (Y: 960 -> 1920).
+    - Top Pane (Speaker):
+      * Crop a region centered on the primary speaker (speaker_cx, speaker_cy).
+      * Resize to fill 1080 x 960 (crop-to-fill).
+    - Bottom Pane (Content / Screen / Interaction):
+      * If target is widescreen monitor/gameplay/UI: scale 16:9 source to fit width
+        (1080px wide by 607.5px high) centered vertically inside bottom 960px pane
+        over a darkened blurred background.
+      * If target is localized object/hands: crop region around hands/object and scale to fill 1080 x 960.
+    - Place a subtle 2px dark divider line at Y = 960px.
+    Returns: [1, 3, target_h, target_w] float32 tensor in [0, 1].
+    """
+    B, C, src_h, src_w = frame.shape
+    split_y = target_h // 2  # 960
+    canvas = torch.zeros((B, C, target_h, target_w), device=frame.device, dtype=frame.dtype)
+
+    # ── Top Pane: Primary Speaker (Y: 0 -> split_y, W: target_w) ──
+    spk_cx = speaker_cx if speaker_cx is not None else cx_norm
+    if speaker_cy is not None and 0.05 <= speaker_cy <= 0.95:
+        spk_cy = speaker_cy
+    elif 0.10 <= cy_norm <= 0.90:
+        spk_cy = cy_norm
+    else:
+        spk_cy = 0.40
+
+    pane_h = split_y  # 960
+    pane_w = target_w  # 1080
+    crop_h_top = int(round(0.56 * src_h))
+    crop_w_top = int(round(crop_h_top * (float(pane_w) / float(pane_h))))
+
+    top_x0 = max(0, min(src_w - crop_w_top, int(round(spk_cx * src_w - crop_w_top / 2.0))))
+    top_x1 = top_x0 + crop_w_top
+    top_y0 = max(0, min(src_h - crop_h_top, int(round(spk_cy * src_h - crop_h_top * 0.35))))
+    top_y1 = top_y0 + crop_h_top
+
+    top_crop = frame[:, :, top_y0:top_y1, top_x0:top_x1]
+    top_resized = torch.nn.functional.interpolate(
+        top_crop, size=(pane_h, pane_w), mode='bilinear', align_corners=False
+    )
+    canvas[:, :, 0:split_y, :] = top_resized
+
+    # ── Bottom Pane: Content / Screen / Interaction (Y: split_y -> target_h, W: target_w) ──
+    ft_upper = str(focal_target).upper()
+    if ft_upper == "HELD_OBJECT":
+        # Localized object/hands crop
+        crop_h_bot = int(round(0.56 * src_h))
+        crop_w_bot = int(round(crop_h_bot * (float(pane_w) / float(pane_h))))
+        bot_x0 = max(0, min(src_w - crop_w_bot, int(round(cx_norm * src_w - crop_w_bot / 2.0))))
+        bot_x1 = bot_x0 + crop_w_bot
+        bot_y0 = max(0, min(src_h - crop_h_bot, int(round(cy_norm * src_h - crop_h_bot / 2.0))))
+        bot_y1 = bot_y0 + crop_h_bot
+        bot_crop = frame[:, :, bot_y0:bot_y1, bot_x0:bot_x1]
+        bot_resized = torch.nn.functional.interpolate(
+            bot_crop, size=(pane_h, pane_w), mode='bilinear', align_corners=False
+        )
+        canvas[:, :, split_y:target_h, :] = bot_resized
+    else:
+        # Widescreen monitor / UI / gameplay: fit 1080 width over darkened blurred background
+        # Background: downsampled 4x Gaussian blur, darkened to 40%
+        bg_down = torch.nn.functional.interpolate(frame, size=(pane_h // 4, pane_w // 4), mode='bilinear', align_corners=False)
+        if kornia is not None:
+            bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(25, 25), sigma=(8.0, 8.0))
+        else:
+            bg_blurred_down = bg_down
+        bg_bot = torch.nn.functional.interpolate(bg_blurred_down, size=(pane_h, pane_w), mode='bilinear', align_corners=False) * 0.40
+        canvas[:, :, split_y:target_h, :] = bg_bot
+
+        # Foreground: uncropped 16:9 frame scaled to width 1080 (height = 608px)
+        fg_w = pane_w  # 1080
+        fg_h = int(round(float(src_h) * (float(pane_w) / float(src_w))))  # 608px
+        fg_bot = torch.nn.functional.interpolate(frame, size=(fg_h, fg_w), mode='bilinear', align_corners=False)
+
+        # Center vertically inside bottom pane
+        margin_y = (pane_h - fg_h) // 2  # (960 - 608) // 2 = 176px
+        bot_y0 = split_y + margin_y      # 960 + 176 = 1136
+        bot_y1 = bot_y0 + fg_h           # 1136 + 608 = 1744
+        canvas[:, :, bot_y0:bot_y1, :] = fg_bot
+
+    # ── Subtle 2px Dark Divider Line at Y = 959..961 ──
+    div_y0 = max(0, split_y - 1)
+    div_y1 = min(target_h, split_y + 1)
+    canvas[:, :, div_y0:div_y1, :] = 0.08
+
+    return canvas
+
+
+def render_content_fit(frame: torch.Tensor,
+                       target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
+    """BRANCH C — CONTENT_FIT (Full Graphic Preservation):
+    - Background: Scale the 16:9 source to cover 1080 x 1920, downsample 4x,
+      apply Gaussian blur (sigma=8.0), and darken by 40% (bg * 0.60).
+    - Foreground: Scale the uncropped 16:9 frame to 1080px width (1080 x 607.5)
+      and paste centered vertically at Y = 656px.
+    - Ensures 100% of text on slides, Wikipedia, or wide documents remains readable.
+    Returns: [1, 3, target_h, target_w] float32 tensor in [0, 1].
+    """
+    B, C, src_h, src_w = frame.shape
+
+    # Layer 1: Blurred, darkened cover background
+    scale_factor = float(target_h) / float(src_h)
     bg_w = int(src_w * scale_factor)
-    bg_scaled = torch.nn.functional.interpolate(source_tensor, size=(tgt_h, bg_w), mode='bilinear', align_corners=False)
-    
-    start_x = (bg_w - tgt_w) // 2
-    bg_cropped = bg_scaled[:, :, :, start_x:start_x + tgt_w]
-    
-    bg_down = torch.nn.functional.interpolate(bg_cropped, size=(tgt_h // 4, tgt_w // 4), mode='bilinear', align_corners=False)
+    bg_scaled = torch.nn.functional.interpolate(frame, size=(target_h, bg_w), mode='bilinear', align_corners=False)
+
+    start_x = (bg_w - target_w) // 2
+    bg_cropped = bg_scaled[:, :, :, start_x:start_x + target_w]
+
+    bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
     if kornia is not None:
         bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(25, 25), sigma=(8.0, 8.0))
     else:
         bg_blurred_down = bg_down
-    bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(tgt_h, tgt_w), mode='bilinear', align_corners=False)
-    layer1 = bg_blurred * 0.65
+    bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    layer1 = bg_blurred * 0.60
 
-    # Layer 2: Foreground
-    fg_w = tgt_w
-    fg_h = int(src_h * (tgt_w / src_w))
-    layer2 = torch.nn.functional.interpolate(source_tensor, size=(fg_h, fg_w), mode='bilinear', align_corners=False)
-    
-    start_y = (tgt_h - fg_h) // 2
+    # Layer 2: Full-fidelity uncropped 16:9 foreground
+    fg_w = target_w
+    fg_h = int(round(float(src_h) * (float(target_w) / float(src_w))))  # 608px
+    layer2 = torch.nn.functional.interpolate(frame, size=(fg_h, fg_w), mode='bilinear', align_corners=False)
+
+    start_y = (target_h - fg_h) // 2  # (1920 - 608) // 2 = 656px
     processed = layer1.clone()
     processed[:, :, start_y:start_y + fg_h, :] = layer2
-    
-    return (processed.squeeze(0).permute(1, 2, 0) * 255.0).byte()
+
+    return processed
+
+
+def render_broll_pillarbox(source_tensor: torch.Tensor, target_canvas_shape: tuple) -> torch.Tensor:
+    """Backward-compatible wrapper for CONTENT_FIT layout helper."""
+    tgt_h, tgt_w = target_canvas_shape
+    canvas = render_content_fit(source_tensor, target_w=tgt_w, target_h=tgt_h)
+    return (canvas.squeeze(0).permute(1, 2, 0) * 255.0).byte()
 
 
 # ─── Event Stub for CPU execution ───────────────────────────────────────────
@@ -124,6 +252,7 @@ class ThreeThreadRenderPipeline:
         self.errors: List[str] = []
         self.frame_count = 0
         self.subtitle_compositor: Optional[SubtitleCompositor] = None
+        self.speaker_path: Optional[np.ndarray] = None
 
     def _allocate_buffers(self, src_w: int, src_h: int, target_w: int, target_h: int):
         """Pre-allocates tensor memory pools using RMM and DLPack zero-copy."""
@@ -274,6 +403,18 @@ class ThreeThreadRenderPipeline:
                         crop_ratio=float(self.job.target_resolution[0]) / float(self.job.target_resolution[1]),
                         focal_targets=focal_target_intervals
                     )
+
+            # Pre-compute smoothed speaker POI path for SPLIT_STACK top pane framing
+            if self.speaker_path is None:
+                self.speaker_path = compute_crop_path(
+                    spatial_events=mapped_events,
+                    scene_changes=mapped_cuts,
+                    fps=float(self.job.target_fps),
+                    total_frames=total_frames,
+                    crop_ratio=1.0,
+                    focal_targets=[(0, total_frames, "SPEAKER_PRIMARY")],
+                    lock_cy=False
+                )
 
             target_w, target_h = self.job.target_resolution
 
@@ -548,33 +689,51 @@ class ThreeThreadRenderPipeline:
                 else:
                     cx_norm, cy_norm = 0.5, 0.5
 
-                # Strict Full-Height Geometric Lock & Natural 9:16 Portrait Framing
-                # Strictly forbid vertical cropping or digital zoom past 1.0x (ch == 1.0, y0 = 0, y1 = src_h)
-                crop_h = float(src_h)
-                crop_w = float(src_h) * (float(target_w) / float(target_h))  # 607.5px for 1080p
-
-                # Pure horizontal panning based on smoothed cx_norm
-                x_center = cx_norm * float(src_w)
-                x0_val = x_center - (crop_w / 2.0)
-                x0 = max(0, min(int(src_w - crop_w), int(round(x0_val))))
-                x1 = int(round(x0 + crop_w))
-                y0 = 0
-                y1 = src_h
-
-                # Source frame as float [1, C, H, W]
+                # Source frame as float [1, C, H, W] in [0, 1]
                 frame = self.decode_slots[slot].permute(2, 0, 1).unsqueeze(0).float() / 255.0
 
-                # Crop [x0, y0, x1, y1] full-height sub-tensor from decoded frame
-                cropped = frame[:, :, y0:y1, x0:x1]
+                # Multi-Layout Semantic Framing Dispatch: SPEAKER_SOLO, SPLIT_STACK, CONTENT_FIT
+                raw_layout = getattr(current_seg, "layout_mode", "SPEAKER_SOLO") if hasattr(current_seg, "layout_mode") else current_seg.get("layout_mode", "SPEAKER_SOLO")
+                norm_layout = str(raw_layout).upper().strip()
 
-                # Resize directly to target canvas (target_h, target_w) using bilinear interpolation
-                resized = torch.nn.functional.interpolate(
-                    cropped,
-                    size=(target_h, target_w),
-                    mode='bilinear',
-                    align_corners=False
-                )
-                processed = (resized.squeeze(0).permute(1, 2, 0) * 255.0).byte()
+                if norm_layout in ("SPLIT_STACK", "SPLIT_SCREEN"):
+                    ft = getattr(current_seg, "focal_target", "FOCAL_DISPLAY") if hasattr(current_seg, "focal_target") else current_seg.get("focal_target", "FOCAL_DISPLAY")
+                    if self.speaker_path is not None and frame_idx < len(self.speaker_path):
+                        spk_cx, spk_cy = self.speaker_path[frame_idx]
+                    else:
+                        spk_cx, spk_cy = cx_norm, 0.40
+
+                    rendered_tensor = render_split_stack(
+                        frame=frame,
+                        cx_norm=cx_norm,
+                        cy_norm=cy_norm,
+                        speaker_cx=spk_cx,
+                        speaker_cy=spk_cy,
+                        focal_target=str(ft),
+                        target_w=target_w,
+                        target_h=target_h
+                    )
+                    # For SPLIT_STACK: Anchor subtitles directly across the divider boundary at Y ≈ 960px
+                    sub_baseline_y = 960.0
+                elif norm_layout in ("CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
+                    rendered_tensor = render_content_fit(
+                        frame=frame,
+                        target_w=target_w,
+                        target_h=target_h
+                    )
+                    # For CONTENT_FIT: Anchor subtitles at Y = 65% (Y ≈ 1248px)
+                    sub_baseline_y = float(target_h) * 0.65
+                else:  # SPEAKER_SOLO (Full 9:16 Portrait)
+                    rendered_tensor = render_speaker_solo(
+                        frame=frame,
+                        cx_norm=cx_norm,
+                        target_w=target_w,
+                        target_h=target_h
+                    )
+                    # For SPEAKER_SOLO: Anchor subtitles at Y = 65% (Y ≈ 1248px)
+                    sub_baseline_y = float(target_h) * 0.65
+
+                processed = (rendered_tensor.squeeze(0).permute(1, 2, 0) * 255.0).byte()
 
                 # Subtitle Compositor (Premultiplied Alpha Porter-Duff Over)
                 if self.subtitle_compositor and self.job.transcript_words:
@@ -585,7 +744,7 @@ class ThreeThreadRenderPipeline:
                         words=self.job.transcript_words,
                         target_w=target_w,
                         target_h=target_h,
-                        baseline_y=float(target_h) * 0.65
+                        baseline_y=sub_baseline_y
                     )
                     processed_final = (processed_with_subs.squeeze(0) * 255.0).byte().clone()
                 else:

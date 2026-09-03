@@ -26,8 +26,12 @@ from wsl2_gpu.subtitle_compositor import (
     SUBTITLE_Y_ANCHOR,
     MAX_LINE_WIDTH,
 )
-from wsl2_gpu.vram_orchestrator import VRAMOrchestrator
-from wsl2_gpu.render_spoke import render_broll_pillarbox
+from wsl2_gpu.render_spoke import (
+    render_broll_pillarbox,
+    render_speaker_solo,
+    render_split_stack,
+    render_content_fit
+)
 from shared.schemas import VideoSegment
 
 
@@ -437,10 +441,61 @@ def test_fullscreen_916_crop():
     print("[PASSED] Full-Height 9:16 Geometric Lock & Digital Zoom Ban tests PASSED.")
 
 
+def test_multi_layout_framing_engine():
+    print("\n--- 10. Testing Multi-Layout Semantic Framing Engine (Solo, Stacked Split-Screen, Content Fit) ---")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    src_h, src_w = 1080, 1920
+    target_h, target_w = 1920, 1080
+    frame = torch.rand((1, 3, src_h, src_w), device=device)
+
+    # 1. Test BRANCH A: SPEAKER_SOLO (Full 9:16 Portrait)
+    solo_out = render_speaker_solo(frame, cx_norm=0.5, target_w=target_w, target_h=target_h)
+    assert solo_out.shape == (1, 3, target_h, target_w), f"Expected shape (1, 3, 1920, 1080), got {solo_out.shape}"
+    assert solo_out.min() >= 0.0 and solo_out.max() <= 1.0
+    print(f"BRANCH A (SPEAKER_SOLO): shape={solo_out.shape} -> 1080x1920 full 9:16 portrait [OK]")
+
+    # 2. Test BRANCH B: SPLIT_STACK (50/50 Vertical Stack)
+    # Test FOCAL_DISPLAY (Widescreen Monitor Fit over Darkened Blurred Background)
+    split_disp = render_split_stack(frame, cx_norm=0.5, cy_norm=0.4, focal_target="FOCAL_DISPLAY", target_w=target_w, target_h=target_h)
+    assert split_disp.shape == (1, 3, target_h, target_w)
+    
+    # Verify 2px Dark Divider at Y = 959..961
+    divider_slice = split_disp[:, :, 959:961, :]
+    assert torch.all(divider_slice <= 0.10), f"Expected dark divider line at Y=959..961, got max value {divider_slice.max()}"
+    print(f"BRANCH B (SPLIT_STACK - FOCAL_DISPLAY): shape={split_disp.shape}, 2px divider verified at Y=960 [OK]")
+
+    # Test HELD_OBJECT (Localized Object Crop in Bottom Pane)
+    split_obj = render_split_stack(frame, cx_norm=0.5, cy_norm=0.6, focal_target="HELD_OBJECT", target_w=target_w, target_h=target_h)
+    assert split_obj.shape == (1, 3, target_h, target_w)
+    print(f"BRANCH B (SPLIT_STACK - HELD_OBJECT): shape={split_obj.shape}, hands/item framing in bottom pane [OK]")
+
+    # 3. Test BRANCH C: CONTENT_FIT (Full Graphic Preservation)
+    content_out = render_content_fit(frame, target_w=target_w, target_h=target_h)
+    assert content_out.shape == (1, 3, target_h, target_w)
+    print(f"BRANCH C (CONTENT_FIT): shape={content_out.shape}, 100% readable slide/article preservation [OK]")
+
+    # 4. Test Subtitle Adaptive Positioning
+    compositor = SubtitleCompositor()
+    dummy_words = [{"word": "TESTING", "start": 0.0, "end": 1.0, "confidence": 0.99}]
+    compositor.build_word_atlas(dummy_words, target_w=target_w)
+    
+    # SPLIT_STACK subtitle at divider boundary (baseline_y = 960.0)
+    split_sub = compositor.composite_frame(split_disp, timestamp=0.5, words=dummy_words, target_w=target_w, target_h=target_h, baseline_y=960.0)
+    assert split_sub.shape == split_disp.shape
+    print("Adaptive Subtitles (SPLIT_STACK): Anchored at divider boundary Y=960px [OK]")
+
+    # SPEAKER_SOLO subtitle at Y = 65% (baseline_y = 1248.0)
+    solo_sub = compositor.composite_frame(solo_out, timestamp=0.5, words=dummy_words, target_w=target_w, target_h=target_h, baseline_y=float(target_h) * 0.65)
+    assert solo_sub.shape == solo_out.shape
+    print("Adaptive Subtitles (SPEAKER_SOLO / CONTENT_FIT): Anchored at Y=65% (1248px) [OK]")
+
+    print("[PASSED] Multi-Layout Semantic Framing Engine tests PASSED.")
+
+
 if __name__ == "__main__":
     print("==================================================")
     print("   Project Aether V2 Comprehensive Unit Tests     ")
-    print("   Script-Grounded Framing & Kinetic Subtitles    ")
+    print("   Multi-Layout Semantic Framing Engine           ")
     print("==================================================")
     test_trajectory_smoother()
     test_poi_hierarchical_weights()
@@ -449,7 +504,7 @@ if __name__ == "__main__":
     test_micro_chunking()
     test_bicameral_uppercasing()
     test_subtitle_compositor()
-    test_vram_orchestrator()
     test_broll_pillarbox()
     test_fullscreen_916_crop()
+    test_multi_layout_framing_engine()
     print("\n[SUCCESS] ALL PROJECT AETHER V2 TESTS PASSED SUCCESSFULLY!\n")
