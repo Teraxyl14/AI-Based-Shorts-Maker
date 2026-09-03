@@ -1,0 +1,65 @@
+services:
+  nats:
+    image: nats:2.11-alpine
+    container_name: aether-nats
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./data/nats_store:/data/nats_store
+      - ./nats-server.conf:/etc/nats/nats-server.conf:ro
+    restart: unless-stopped
+
+  vllm-brain:
+    image: vllm/vllm-openai:latest
+    container_name: aether-vllm-brain
+    runtime: nvidia
+    ipc: host
+    ports:
+      - "8000:8000"
+    environment:
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+      - NCCL_P2P_DISABLE=1
+      - HF_HOME=/models/huggingface
+      - VLLM_ENGINE_ITERATION_TIMEOUT_S=300
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    volumes:
+      - models_cache:/models
+    command: >
+      --model Qwen/Qwen3-VL-8B-Instruct-FP8
+      --dtype auto
+      --max-model-len 4096
+      --gpu-memory-utilization 0.80
+      --max-num-seqs 4
+      --enforce-eager
+      --port 8000
+      --trust-remote-code
+      --language-model-only
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: wsl2_gpu/Dockerfile.unified
+    container_name: aether-orchestrator
+    runtime: nvidia
+    ipc: host
+    environment:
+      - NATS_URL=nats://nats:4222
+      - VLLM_BRAIN_URL=http://vllm-brain:8000
+      - SPATIAL_TRACKER_MODEL=${SPATIAL_TRACKER_MODEL:-yolo26s-pose}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+    volumes:
+      - ./data:/data
+      - ./shared:/app/shared
+      - ./wsl2_gpu:/app/wsl2_gpu
+      - models_cache:/data/models
+    depends_on:
+      - nats
+    restart: unless-stopped
+
+volumes:
+  models_cache:

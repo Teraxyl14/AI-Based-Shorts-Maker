@@ -1,0 +1,5 @@
+nats-py[nkeys]>=2.7.0
+httpx>=0.27.0
+pydantic>=2.5.0
+langgraph>=0.0.30
+watchdog>=4.0.0

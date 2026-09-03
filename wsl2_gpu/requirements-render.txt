@@ -1,0 +1,11 @@
+nats-py[nkeys]>=2.7.0
+pydantic>=2.5.0
+torch>=2.2.0
+kornia>=0.7.2
+pillow>=10.2.0
+numpy>=1.26.0
+rmm-cu12
+cupy-cuda12x
+uharfbuzz
+freetype-py
+scipy>=1.12.0

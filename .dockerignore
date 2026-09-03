@@ -1,0 +1,20 @@
+# Ignore local virtual environments
+wsl2_gpu/gpu-env/
+wsl2_gpu/models/
+
+# Ignore local models and output data
+data/
+
+# Ignore Python cache files
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Ignore local environment files and logs
+.env
+.git/
+.gitignore
+*.log
+*.wav
+*.mp4

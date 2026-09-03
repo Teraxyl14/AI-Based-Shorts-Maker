@@ -1,0 +1,52 @@
+# ──────────────────────────────────────────────────────────────
+# Project Aether — .gitignore
+# ──────────────────────────────────────────────────────────────
+
+# Python virtual environments
+wsl2_gpu/gpu-env/
+windows_npu/npu-env/
+
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Model weights & cached downloads
+wsl2_gpu/models/
+data/models/
+
+# Runtime data (videos, outputs, NATS state)
+data/input_videos/*
+data/output_shorts/*
+data/nats_store/
+!data/input_videos/.gitkeep
+!data/output_shorts/.gitkeep
+
+# Media files
+*.mp4
+*.mkv
+*.avi
+*.webm
+*.wav
+*.mp3
+*.flac
+
+# Environment variables
+.env
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Logs
+*.log

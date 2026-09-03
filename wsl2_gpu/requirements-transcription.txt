@@ -1,0 +1,4 @@
+nats-py[nkeys]>=2.7.0
+pydantic>=2.5.0
+torch>=2.2.0
+easytranscriber>=0.1.0

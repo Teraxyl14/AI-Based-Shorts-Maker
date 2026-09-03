@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements and install python packages (lightweight — no ML deps)
+COPY wsl2_gpu/requirements-base.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy source code
+COPY shared /app/shared
+COPY wsl2_gpu /app/wsl2_gpu
+
+ENV PYTHONPATH=/app
+
+CMD ["python", "wsl2_gpu/orchestrator.py"]
