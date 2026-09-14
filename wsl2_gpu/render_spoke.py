@@ -115,6 +115,78 @@ def render_broll_pillarbox(source_tensor: torch.Tensor, target_canvas_shape: tup
     return (canvas.squeeze(0).permute(1, 2, 0) * 255.0).byte()
 
 
+# ─── Shot-Level Adaptive Framing Helpers ────────────────────────────────────
+
+HUMAN_DETECTION_LABELS = frozenset({
+    "face", "head", "face_detection", "person", "torso",
+    "upper_body", "shoulders", "pose", "human", "body", "upper_torso"
+})
+
+
+def classify_shot_framing(shot_start: float, shot_end: float,
+                          spatial_events: List[Any],
+                          sampling_interval: float = 0.5) -> str:
+    """Classifies an individual shot into SHOT_PORTRAIT_PAN or SHOT_GRAPHIC_FIT.
+
+    Directive Rules:
+    - If ANY human face or torso is detected in >= 15% of frames/sampled points in S:
+      Classify shot as 'SHOT_PORTRAIT_PAN'.
+    - If NO human detections exist across >= 85% of frames in S (pure graphics, slides,
+      newspaper clips, widescreen documents, screen UI):
+      Classify shot as 'SHOT_GRAPHIC_FIT'.
+    """
+    shot_dur = shot_end - shot_start
+    if shot_dur <= 0.0:
+        return "SHOT_PORTRAIT_PAN"
+
+    step = min(sampling_interval, max(0.1, shot_dur / 5.0))
+    sample_times = np.arange(shot_start, shot_end, step)
+    if len(sample_times) == 0:
+        sample_times = np.array([shot_start])
+
+    tolerance = step * 0.75
+    human_present_count = 0
+
+    for st in sample_times:
+        has_human = False
+        for pe in spatial_events:
+            ts = pe.get("timestamp", 0.0) if isinstance(pe, dict) else getattr(pe, "timestamp", 0.0)
+            if abs(ts - st) <= tolerance:
+                conf = float(pe.get("confidence", 0.0) if isinstance(pe, dict) else getattr(pe, "confidence", 0.0))
+                lbl = str(pe.get("label", "") if isinstance(pe, dict) else getattr(pe, "label", "")).lower().strip()
+                if conf >= 0.35 and lbl in HUMAN_DETECTION_LABELS:
+                    has_human = True
+                    break
+        if has_human:
+            human_present_count += 1
+
+    human_ratio = human_present_count / float(len(sample_times))
+    if human_ratio >= 0.15:
+        return "SHOT_PORTRAIT_PAN"
+    else:
+        return "SHOT_GRAPHIC_FIT"
+
+
+def build_shot_framing_schedule(total_duration: float,
+                                mapped_cuts: List[Dict[str, Any]],
+                                spatial_events: List[Any]) -> List[Tuple[float, float, str]]:
+    """Builds a per-shot framing schedule across the clip timeline."""
+    cut_timestamps = sorted(set([0.0] + [
+        c.get("timestamp", 0.0) if isinstance(c, dict) else getattr(c, "timestamp", 0.0)
+        for c in mapped_cuts
+        if 0.0 < (c.get("timestamp", 0.0) if isinstance(c, dict) else getattr(c, "timestamp", 0.0)) < total_duration
+    ] + [total_duration]))
+
+    schedule = []
+    for i in range(len(cut_timestamps) - 1):
+        s_start = cut_timestamps[i]
+        s_end = cut_timestamps[i + 1]
+        mode = classify_shot_framing(s_start, s_end, spatial_events)
+        schedule.append((s_start, s_end, mode))
+
+    return schedule
+
+
 # ─── Event Stub for CPU execution ───────────────────────────────────────────
 
 class CUDAEventStub:
@@ -165,6 +237,7 @@ class ThreeThreadRenderPipeline:
         self.errors: List[str] = []
         self.frame_count = 0
         self.subtitle_compositor: Optional[SubtitleCompositor] = None
+        self.shot_framing_schedule: List[Tuple[float, float, str]] = []
 
     def _allocate_buffers(self, src_w: int, src_h: int, target_w: int, target_h: int):
         """Pre-allocates tensor memory pools using RMM and DLPack zero-copy."""
@@ -281,6 +354,14 @@ class ThreeThreadRenderPipeline:
                 stitched_ts = self._map_original_to_stitched(orig_ts, segs)
                 if stitched_ts is not None:
                     mapped_cuts.append({"timestamp": stitched_ts, "frame_idx": int(stitched_ts * self.job.target_fps)})
+
+            # Step 4b: Build Shot-Level Adaptive Framing Schedule
+            self.shot_framing_schedule = build_shot_framing_schedule(
+                total_duration=total_duration,
+                mapped_cuts=mapped_cuts,
+                spatial_events=mapped_events
+            )
+            logger.info(f"[Clip {self.idx}] Shot-Level Adaptive Framing: {len(self.shot_framing_schedule)} shots: {self.shot_framing_schedule}")
 
             # Build per-segment focal target intervals for trajectory optimization
             focal_target_intervals = []
@@ -592,27 +673,39 @@ class ThreeThreadRenderPipeline:
                 # Source frame as float [1, C, H, W] in [0, 1]
                 frame = self.decode_slots[slot].permute(2, 0, 1).unsqueeze(0).float() / 255.0
 
-                # 2-Mode Universal Framing Dispatch: SMART_PORTRAIT_PAN or CANVAS_GRAPHIC_FIT
-                raw_layout = getattr(current_seg, "layout_mode", "SMART_PORTRAIT_PAN") if hasattr(current_seg, "layout_mode") else current_seg.get("layout_mode", "SMART_PORTRAIT_PAN")
-                norm_layout = str(raw_layout).upper().strip()
+                # Shot-Level Adaptive Framing Dispatch (SHOT_PORTRAIT_PAN vs SHOT_GRAPHIC_FIT)
+                shot_mode = "SHOT_PORTRAIT_PAN"
+                if self.shot_framing_schedule:
+                    for s_start, s_end, s_mode in self.shot_framing_schedule:
+                        if s_start <= stitched_time < s_end:
+                            shot_mode = s_mode
+                            break
+                    else:
+                        shot_mode = self.shot_framing_schedule[-1][2]
+                else:
+                    # Fallback to segment layout if schedule is empty
+                    raw_layout = getattr(current_seg, "layout_mode", "SMART_PORTRAIT_PAN") if hasattr(current_seg, "layout_mode") else current_seg.get("layout_mode", "SMART_PORTRAIT_PAN")
+                    norm_layout = str(raw_layout).upper().strip()
+                    if norm_layout in ("CANVAS_GRAPHIC_FIT", "CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
+                        shot_mode = "SHOT_GRAPHIC_FIT"
+                    else:
+                        shot_mode = "SHOT_PORTRAIT_PAN"
 
-                if norm_layout in ("CANVAS_GRAPHIC_FIT", "CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
+                if shot_mode in ("SHOT_GRAPHIC_FIT", "CANVAS_GRAPHIC_FIT"):
                     rendered_tensor = render_canvas_graphic_fit(
                         frame=frame,
                         target_w=target_w,
                         target_h=target_h
                     )
-                    # CANVAS_GRAPHIC_FIT: Anchor subtitles at Y = 65% (Y ≈ 1248px)
-                    sub_baseline_y = float(target_h) * 0.65
-                else:  # SMART_PORTRAIT_PAN (default for all human-presenter content)
+                else:  # SHOT_PORTRAIT_PAN / SMART_PORTRAIT_PAN (Full-height 9:16 crop at cx_norm)
                     rendered_tensor = render_smart_portrait_pan(
                         frame=frame,
                         cx_norm=cx_norm,
                         target_w=target_w,
                         target_h=target_h
                     )
-                    # SMART_PORTRAIT_PAN: Anchor subtitles at Y = 65% (Y ≈ 1248px)
-                    sub_baseline_y = float(target_h) * 0.65
+                # Uniform Subtitle Anchor: Y = 65% (Y ≈ 1248px)
+                sub_baseline_y = float(target_h) * 0.65
 
                 processed = (rendered_tensor.squeeze(0).permute(1, 2, 0) * 255.0).byte()
 

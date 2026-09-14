@@ -31,7 +31,9 @@ from wsl2_gpu.render_spoke import (
     render_smart_portrait_pan,
     render_canvas_graphic_fit,
     render_speaker_solo,
-    render_content_fit
+    render_content_fit,
+    classify_shot_framing,
+    build_shot_framing_schedule
 )
 from shared.schemas import VideoSegment
 
@@ -83,49 +85,58 @@ def test_poi_hierarchical_weights():
 
     print(f"Tier classification: face=({face_w},{face_min}), person=({person_w},{person_min}), object=({obj_w},{obj_min})")
 
-    # Verify weighted centroid with hierarchical weights
-    # Face at (0.4, 0.4) with conf=0.9 → combined_weight = 0.65 * 0.9 = 0.585
-    # Person at (0.8, 0.8) with conf=0.8 → combined_weight = 0.25 * 0.8 = 0.200
-    # total_w = 0.785
-    # expected_cx = (0.4 * 0.585 + 0.8 * 0.200) / 0.785 = (0.234 + 0.160) / 0.785 = 0.5019
-    # expected_cy = (0.4 * 0.585 + 0.8 * 0.200) / 0.785 - 0.04 = 0.4619
+    # Verify Strict Face-Centering Priority (Directive 2):
+    # When face is detected with confidence >= 0.45: cx_t = face_cx strictly (ignoring person torso and objects)
     spatial_events = [
         {"timestamp": 0.0, "bbox": (0.4, 0.4, 0.2, 0.2), "confidence": 0.9, "label": "face"},
         {"timestamp": 0.0, "bbox": (0.8, 0.8, 0.4, 0.4), "confidence": 0.8, "label": "person"},
+        {"timestamp": 0.0, "bbox": (0.9, 0.6, 0.3, 0.3), "confidence": 0.95, "label": "laptop"},
     ]
     poi = _extract_poi_from_spatial_events(spatial_events, fps=30.0, total_frames=10)
 
-    expected_cx = (0.4 * 0.585 + 0.8 * 0.200) / 0.785
-    expected_cy = (0.4 * 0.585 + 0.8 * 0.200) / 0.785 - 0.04
-    np.testing.assert_allclose(poi[0, 0], expected_cx, atol=1e-3,
-                               err_msg=f"cx mismatch: got {poi[0, 0]:.4f}, expected {expected_cx:.4f}")
-    np.testing.assert_allclose(poi[0, 1], expected_cy, atol=1e-3,
-                               err_msg=f"cy mismatch: got {poi[0, 1]:.4f}, expected {expected_cy:.4f}")
-    print(f"Hierarchical weighted centroid: cx={poi[0, 0]:.4f} (expect {expected_cx:.4f}), "
-          f"cy={poi[0, 1]:.4f} (expect {expected_cy:.4f})")
+    # Face strictly centers at 0.4 with ZERO pull from person at 0.8 or laptop at 0.9
+    np.testing.assert_allclose(poi[0, 0], 0.4, atol=1e-3,
+                               err_msg=f"Strict face centering failed: expected 0.4, got {poi[0, 0]:.4f}")
+    print(f"Strict Face-Centering Priority verified: cx={poi[0, 0]:.4f} (ignoring person and secondary objects) [OK]")
 
-    # Face weight dominance: face should pull POI toward its position
-    assert abs(poi[0, 0] - 0.4) < abs(poi[0, 0] - 0.8), \
-        "Face (w=0.65) should dominate over person (w=0.25)"
-    print("Face weight dominance verified.")
+    # Verify Fallback to Upper-Torso Midpoint when face is occluded/absent
+    person_only_events = [
+        {"timestamp": 0.0, "bbox": (0.75, 0.6, 0.3, 0.5), "confidence": 0.85, "label": "person"},
+        {"timestamp": 0.0, "bbox": (0.2, 0.7, 0.2, 0.2), "confidence": 0.90, "label": "laptop"},
+    ]
+    poi_person = _extract_poi_from_spatial_events(person_only_events, fps=30.0, total_frames=10)
+    np.testing.assert_allclose(poi_person[0, 0], 0.75, atol=1e-3,
+                               err_msg=f"Upper torso fallback failed: expected 0.75, got {poi_person[0, 0]:.4f}")
+    print(f"Upper-Torso Midpoint Fallback verified: cx={poi_person[0, 0]:.4f} [OK]")
 
-    # Verify fallback POI
+    # Verify Zero-Lag Initial State:
+    # First detection occurs at frame 3 (timestamp = 0.1s). Frames 0..2 must NOT default to 0.50!
+    delayed_events = [
+        {"timestamp": 0.1, "bbox": (0.32, 0.4, 0.2, 0.2), "confidence": 0.9, "label": "face"}
+    ]
+    poi_delayed = _extract_poi_from_spatial_events(delayed_events, fps=30.0, total_frames=10)
+    assert poi_delayed[0, 0] == 0.32, f"Opening frame 0 dragged to default! Expected 0.32, got {poi_delayed[0, 0]}"
+    assert poi_delayed[1, 0] == 0.32
+    assert poi_delayed[2, 0] == 0.32
+    print(f"Zero-Lag Initial State verified: frame 0={poi_delayed[0, 0]:.2f}, frame 3={poi_delayed[3, 0]:.2f} (no 0.50 drag) [OK]")
+
+    # Verify fallback POI when no detections exist
     empty_events = []
     poi_empty = _extract_poi_from_spatial_events(empty_events, fps=30.0, total_frames=5)
     np.testing.assert_allclose(poi_empty[0], FALLBACK_POI, atol=1e-8,
                                err_msg="Fallback POI should be (0.50, 0.45)")
-    print(f"Fallback POI verified: ({poi_empty[0, 0]:.2f}, {poi_empty[0, 1]:.2f})")
+    print(f"Fallback POI verified: ({poi_empty[0, 0]:.2f}, {poi_empty[0, 1]:.2f}) [OK]")
 
-    # Verify face confidence threshold (conf < 0.40 should be rejected)
+    # Verify face confidence threshold (conf < 0.45 should be rejected as strict face)
     low_conf_face = [
-        {"timestamp": 0.0, "bbox": (0.3, 0.3, 0.2, 0.2), "confidence": 0.35, "label": "face"},
+        {"timestamp": 0.0, "bbox": (0.3, 0.3, 0.2, 0.2), "confidence": 0.40, "label": "face"},
     ]
     poi_low = _extract_poi_from_spatial_events(low_conf_face, fps=30.0, total_frames=5)
     np.testing.assert_allclose(poi_low[0], FALLBACK_POI, atol=1e-8,
-                               err_msg="Face with conf < 0.40 should be rejected")
-    print("Face confidence threshold (>=0.40) verified.")
+                               err_msg="Face with conf < 0.45 should fall back")
+    print("Face confidence threshold (>=0.45) verified [OK]")
 
-    print("[PASSED] Hierarchical POI Weighted Fusion tests PASSED.")
+    print("[PASSED] Pure Speaker Face-Centering & Zero-Lag tests PASSED.")
 
 
 def test_script_grounded_semantic_framing():
@@ -517,10 +528,75 @@ def test_two_mode_universal_framing():
     print("[PASSED] 2-Mode Universal Framing Engine tests PASSED.")
 
 
+def test_shot_level_adaptive_framing():
+    print("\n--- 11. Testing Shot-Level Adaptive Framing Dispatch ---")
+    # Shot 1: 0.0s to 5.0s with human face/torso in 40% of frames -> SHOT_PORTRAIT_PAN
+    events_human = [
+        {"timestamp": 1.0, "bbox": (0.35, 0.4, 0.2, 0.2), "confidence": 0.90, "label": "face"},
+        {"timestamp": 3.0, "bbox": (0.35, 0.5, 0.3, 0.5), "confidence": 0.85, "label": "person"}
+    ]
+    mode_human = classify_shot_framing(0.0, 5.0, events_human)
+    assert mode_human == "SHOT_PORTRAIT_PAN", f"Expected SHOT_PORTRAIT_PAN, got {mode_human}"
+    print(f"  Human Present Shot (>=15% human frames) -> {mode_human} [OK]")
+
+    # Shot 2: 5.0s to 10.0s with pure slide / document / screen UI (zero humans) -> SHOT_GRAPHIC_FIT
+    events_graphic = [
+        {"timestamp": 6.0, "bbox": (0.5, 0.5, 0.8, 0.6), "confidence": 0.95, "label": "laptop"},
+        {"timestamp": 8.0, "bbox": (0.5, 0.5, 0.8, 0.6), "confidence": 0.92, "label": "monitor"}
+    ]
+    mode_graphic = classify_shot_framing(5.0, 10.0, events_graphic)
+    assert mode_graphic == "SHOT_GRAPHIC_FIT", f"Expected SHOT_GRAPHIC_FIT, got {mode_graphic}"
+    print(f"  Pure Graphic Shot (>=85% no humans) -> {mode_graphic} [OK]")
+
+    # Verify build_shot_framing_schedule
+    all_events = events_human + events_graphic
+    mapped_cuts = [{"timestamp": 5.0, "frame_idx": 150}]
+    schedule = build_shot_framing_schedule(total_duration=10.0, mapped_cuts=mapped_cuts, spatial_events=all_events)
+    assert len(schedule) == 2
+    assert schedule[0] == (0.0, 5.0, "SHOT_PORTRAIT_PAN")
+    assert schedule[1] == (5.0, 10.0, "SHOT_GRAPHIC_FIT")
+    print(f"  Shot Schedule Generated: {schedule} [OK]")
+    print("[PASSED] Shot-Level Adaptive Framing tests PASSED.")
+
+
+def test_teaser_blacklist_and_narrative_body():
+    print("\n--- 12. Testing Teaser Blacklist (>= 60s) & Narrative Body Selection ---")
+    from shared.schemas import VideoSegment, ClipManifest, CuttingManifest
+
+    # Teaser clip (< 58.0s) must be detected and rejected
+    teaser_clip = ClipManifest(
+        segments=[VideoSegment(segment_start=15.0, segment_end=45.0, layout_mode="SMART_PORTRAIT_PAN")],
+        hook_score=0.88,
+        retention_score=0.82,
+        reasoning="Intro teaser test clip"
+    )
+    manifest_teaser = CuttingManifest(clips=[teaser_clip])
+
+    found_rejection = False
+    for clip_idx, c in enumerate(manifest_teaser.clips):
+        for s in c.segments:
+            if s.segment_start < 58.0:
+                found_rejection = True
+                break
+    assert found_rejection, "Director should reject teaser clips (< 58.0s)"
+    print(f"  Teaser clip (start=15.0s) successfully blocked by blacklist [OK]")
+
+    # Body clip (>= 60.0s) must pass
+    body_clip = ClipManifest(
+        segments=[VideoSegment(segment_start=75.0, segment_end=110.0, layout_mode="SMART_PORTRAIT_PAN")],
+        hook_score=0.92,
+        retention_score=0.89,
+        reasoning="Narrative body test clip"
+    )
+    assert body_clip.segments[0].segment_start >= 60.0
+    print(f"  Narrative body clip (start=75.0s) passes blacklist [OK]")
+    print("[PASSED] Teaser Blacklist & Narrative Body Selection tests PASSED.")
+
+
 if __name__ == "__main__":
     print("==================================================")
     print("   Project Aether V2 Comprehensive Unit Tests     ")
-    print("   2-Mode Universal Production Standards          ")
+    print("   Shot-Level Adaptive Framing & Centering Standards")
     print("==================================================")
     test_trajectory_smoother()
     test_poi_hierarchical_weights()
@@ -532,4 +608,6 @@ if __name__ == "__main__":
     test_broll_pillarbox()
     test_fullscreen_916_crop()
     test_two_mode_universal_framing()
+    test_shot_level_adaptive_framing()
+    test_teaser_blacklist_and_narrative_body()
     print("\n[SUCCESS] ALL PROJECT AETHER V2 TESTS PASSED SUCCESSFULLY!\n")

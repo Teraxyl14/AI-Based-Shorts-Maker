@@ -226,7 +226,15 @@ class DebateGraph:
                 f"High-engagement segments arousal scores: {json.dumps(brief_arousal[:10])}\n"
             )
 
-        if entries:
+        # Intro Teaser Blacklist (00:00 - 01:00): Filter timeline to body of video (>= 60.0s)
+        body_entries = [e for e in entries if get_item_field(e, "timestamp", 0.0) >= 60.0] if entries else []
+        body_words = [w for w in transcript_words if (w.get("start", 0.0) if isinstance(w, dict) else getattr(w, "start", 0.0)) >= 60.0]
+
+        if body_entries:
+            transcript_snippet = get_structured_event_summaries(body_entries)
+        elif body_words:
+            transcript_snippet = format_transcript_compact(body_words)
+        elif entries:
             transcript_snippet = get_structured_event_summaries(entries)
         else:
             transcript_snippet = format_transcript_compact(transcript_words)
@@ -260,22 +268,23 @@ class DebateGraph:
 
         system_prompt = (
             "You are an elite short-form video editor curating viral TikTok/Reels/Shorts.\n"
-            "LMO Mode: rely strictly on spatial metadata. Curate 4 to 5 distinct, non-overlapping candidate clips.\n"
-            "Directives:\n"
-            "- Narrative: Each clip must be a SINGLE-TOPIC story arc — one self-contained premise with Premise -> Friction -> Conclusion. "
-            "Do NOT create montage summaries or stitch disconnected windows.\n"
+            "LMO Mode: rely strictly on spatial metadata. Curate 4 distinct, non-overlapping candidate clips.\n"
+            "CRITICAL EDITORIAL RULES:\n"
+            "- DO NOT select clips from the first 60 seconds of the video (00:00 - 01:00). This area is an intro teaser / fast montage and makes for an unwatchable short.\n"
+            "- Select self-contained scenes from the BODY of the video where a specific interaction, challenge, joke, or explanation plays out in real-time.\n"
+            "- A valid clip must follow ONE continuous conversation or action from start to finish.\n"
+            "- Narrative: Each clip must be a SINGLE-TOPIC story arc — one self-contained premise with Premise -> Friction -> Conclusion.\n"
             "- Clip duration: Sum of segments in each clip MUST be between 30.0 and 45.0 seconds (target ~38s; strictly NEVER exceed 45.0s).\n"
-            "- Hook: First segment must start on a high-arousal/energy statement.\n"
+            "- Candidate Generation Mandate: Propose 4 distinct candidate clips (each 30s - 45s), all sourced after the 1:00 (60.0s) timestamp mark.\n"
+            "- Hook: First segment must start on a punchy, high-arousal statement or action.\n"
             "- 2-Mode Universal Layout (layout_mode per segment):\n"
-            "  * SMART_PORTRAIT_PAN: Assign to ALL segments with a human presenter, dialogue, interviews, reactions, desk demonstrations, gaming, live action. This is the DEFAULT.\n"
+            "  * SMART_PORTRAIT_PAN: Assign to ALL segments with a human presenter, dialogue, reactions, desk demonstrations. DEFAULT.\n"
             "  * CANVAS_GRAPHIC_FIT: Assign ONLY when the primary visual content is a full-screen graphic, chart, website, document, or widescreen software UI with NO human presenter in-frame.\n"
-            "- Focal Target: For every segment, assign focal_target from: SPEAKER_PRIMARY (someone speaking), "
-            "SPEAKER_REACTION (listener reacting), FOCAL_DISPLAY (on-screen UI/game/monitor/phone/tablet), "
-            "HELD_OBJECT (hands holding item), ACTION_SCENE (dynamic wide scene)."
+            "- Focal Target: For every segment, assign focal_target from: SPEAKER_PRIMARY, SPEAKER_REACTION, FOCAL_DISPLAY, HELD_OBJECT, ACTION_SCENE."
         )
 
         prompt = (
-            f"Candidate timeline:\n{transcript_snippet}\n\n"
+            f"Candidate timeline (Body of Video, >= 60.0s):\n{transcript_snippet}\n\n"
             f"Visual metadata:{fused_context}\n"
             f"{critique_context}\n\n"
             "Return JSON matching this schema:\n"
@@ -285,7 +294,8 @@ class DebateGraph:
             "\"emphasis_zoom\": bool}], "
             "\"hook_score\": float, \"retention_score\": float, \"cta_present\": bool, "
             "\"reasoning\": str (max 5 words), \"caption_text\": str (max 5 words)}]}. "
-            "You MUST return 4 to 5 clips, each with total duration between 30.0s and 45.0s (target 38s, strictly under 45s). Keep reasoning/caption_text extremely short (under 5 words)."
+            "You MUST return 4 distinct candidate clips, each with total duration between 30.0s and 45.0s (strictly under 45s), "
+            "and all segment timestamps MUST be sourced after the 1:00 (60.0s) mark. Keep reasoning/caption_text extremely short (under 5 words)."
         )
 
         try:
@@ -355,6 +365,12 @@ class DebateGraph:
                                 s.layout_mode = "CANVAS_GRAPHIC_FIT"
                                 break
 
+                # Enforce Teaser Blacklist: drop any candidate clip starting before 58.0s
+                earliest_start = min(s.segment_start for s in segs) if segs else 0.0
+                if earliest_start < 58.0:
+                    logger.warning(f"[GRAPH] Filtered candidate clip starting at {earliest_start:.1f}s (violates >= 60.0s teaser blacklist)")
+                    continue
+
                 clips.append(ClipManifest(
                     segments=segs,
                     title=str(c.get("caption_text", ""))[:60],
@@ -365,6 +381,11 @@ class DebateGraph:
                     caption_text=str(c.get("caption_text", "")),
                     editor_version=current_iter + 1
                 ))
+
+            # Ensure we have clips; if all were filtered by blacklist, use body fallbacks
+            if not clips:
+                logger.warning("[GRAPH] All LLM candidate clips were in teaser zone. Using narrative body fallbacks (>= 60s).")
+                raise ValueError("No valid candidate clips sourced after 60.0s")
 
             new_manifest = CuttingManifest(
                 clips=clips,
@@ -378,24 +399,13 @@ class DebateGraph:
             fallback_clips = [
                 ClipManifest(
                     segments=[
-                        VideoSegment(segment_start=0.0, segment_end=18.0, focal_target="ACTION_SCENE"),
-                        VideoSegment(segment_start=18.0, segment_end=42.0, focal_target="SPEAKER_PRIMARY")
+                        VideoSegment(segment_start=65.0, segment_end=82.0, focal_target="SPEAKER_PRIMARY"),
+                        VideoSegment(segment_start=82.0, segment_end=102.0, focal_target="HELD_OBJECT")
                     ],
                     hook_score=0.85, retention_score=0.80,
                     cta_present=True,
-                    reasoning="Fallback clip 1 (42s)",
-                    caption_text="Clip 1",
-                    editor_version=current_iter + 1
-                ),
-                ClipManifest(
-                    segments=[
-                        VideoSegment(segment_start=55.0, segment_end=72.0, focal_target="SPEAKER_PRIMARY"),
-                        VideoSegment(segment_start=72.0, segment_end=95.0, focal_target="HELD_OBJECT")
-                    ],
-                    hook_score=0.85, retention_score=0.80,
-                    cta_present=True,
-                    reasoning="Fallback clip 2 (40s)",
-                    caption_text="Clip 2",
+                    reasoning="Body clip 1 (37s)",
+                    caption_text="Body scene 1",
                     editor_version=current_iter + 1
                 ),
                 ClipManifest(
@@ -405,8 +415,8 @@ class DebateGraph:
                     ],
                     hook_score=0.85, retention_score=0.80,
                     cta_present=True,
-                    reasoning="Fallback clip 3 (38s)",
-                    caption_text="Clip 3",
+                    reasoning="Body clip 2 (38s)",
+                    caption_text="Body scene 2",
                     editor_version=current_iter + 1
                 ),
                 ClipManifest(
@@ -416,8 +426,19 @@ class DebateGraph:
                     ],
                     hook_score=0.85, retention_score=0.80,
                     cta_present=True,
-                    reasoning="Fallback clip 4 (40s)",
-                    caption_text="Clip 4",
+                    reasoning="Body clip 3 (40s)",
+                    caption_text="Body scene 3",
+                    editor_version=current_iter + 1
+                ),
+                ClipManifest(
+                    segments=[
+                        VideoSegment(segment_start=210.0, segment_end=230.0, focal_target="SPEAKER_PRIMARY"),
+                        VideoSegment(segment_start=230.0, segment_end=248.0, focal_target="HELD_OBJECT")
+                    ],
+                    hook_score=0.85, retention_score=0.80,
+                    cta_present=True,
+                    reasoning="Body clip 4 (38s)",
+                    caption_text="Body scene 4",
                     editor_version=current_iter + 1
                 )
             ]
@@ -567,6 +588,13 @@ class DebateGraph:
                     else:
                         norm_layout = "SMART_PORTRAIT_PAN"
                         
+                    if seg_start < 58.0:
+                        rejection_reason = (
+                            f"REJECTED: Clip {clip_idx + 1} starts at {seg_start:.1f}s in the intro teaser zone. "
+                            f"All clips MUST start after 60.0s from the narrative body of the video."
+                        )
+                        break
+
                     if camera_target == "SPEAKER_FACE":
                         continuous_face_duration += seg_dur
                         

@@ -61,66 +61,86 @@ PERSON_LABELS = frozenset({"person", "torso", "upper_body", "shoulders", "pose",
 def _extract_poi_from_spatial_events(spatial_events: List[Any],
                                      fps: float,
                                      total_frames: int) -> np.ndarray:
-    """Extracts a per-frame POI array using hierarchical weighted centroid fusion.
+    """Extracts a per-frame POI array enforcing Strict Face-Centering Priority and Zero-Lag Initial State.
 
-    Weight hierarchy:
-        - Primary Face Detection: w=0.65 (conf ≥ 0.40)
-        - Upper-Torso / Shoulders: w=0.25 (conf ≥ 0.30)
-        - Salient Moving Objects:  w=0.10 (conf ≥ 0.30)
+    Hierarchy:
+        1. Primary Face (conf >= 0.45): cx_t = face_cx (monitors, held objects, saliency strictly ignored).
+        2. Upper-Torso / Person (conf >= 0.35): cx_t = person_cx (upper torso midpoint fallback).
+        3. Secondary Salient Detections (conf >= 0.30): weighted centroid fallback.
+
+    Zero-Lag Initial State:
+        Finds the first valid detection in the shot/clip and back-fills frames 0..first_frame,
+        guaranteeing State_0 = cx_frame_0 without dragging from 0.50.
 
     Returns:
         np.ndarray of shape [total_frames, 2] — normalized (cx, cy) per frame.
     """
     poi = np.full((total_frames, 2), FALLBACK_POI, dtype=np.float64)
 
-    # Group spatial events by nearest frame index
-    # Each entry: (cx, cy, combined_weight) where combined_weight = tier_weight * confidence
-    frame_boxes: Dict[int, List[Tuple[float, float, float]]] = {}
+    frame_faces: Dict[int, List[Tuple[float, float, float]]] = {}
+    frame_persons: Dict[int, List[Tuple[float, float, float]]] = {}
+    frame_others: Dict[int, List[Tuple[float, float, float]]] = {}
 
     for pe in spatial_events:
         if isinstance(pe, dict):
             ts = pe.get("timestamp", 0.0)
             bbox = pe.get("bbox", (0.5, 0.5, 1.0, 1.0))
             confidence = float(pe.get("confidence", 0.0))
-            label = str(pe.get("label", ""))
+            label = str(pe.get("label", "")).lower().strip()
         else:
             ts = getattr(pe, "timestamp", 0.0)
             bbox = getattr(pe, "bbox", (0.5, 0.5, 1.0, 1.0))
             confidence = float(getattr(pe, "confidence", 0.0))
-            label = str(getattr(pe, "label", ""))
+            label = str(getattr(pe, "label", "")).lower().strip()
 
-        tier_weight, min_conf = _classify_detection_tier(label)
+        frame_idx = min(max(0, int(ts * fps)), total_frames - 1)
+        cx, cy, w, h = bbox
 
-        if confidence >= min_conf:
-            frame_idx = min(int(ts * fps), total_frames - 1)
-            if frame_idx < 0:
-                frame_idx = 0
+        if label in FACE_LABELS and confidence >= 0.45:
+            frame_faces.setdefault(frame_idx, []).append((cx, cy, confidence))
+        elif label in PERSON_LABELS and confidence >= 0.35:
+            head_cy = max(0.08, cy - 0.32 * h)
+            frame_persons.setdefault(frame_idx, []).append((cx, head_cy, confidence))
+        elif label not in FACE_LABELS and label not in PERSON_LABELS and confidence >= 0.30:
+            tier_w, _ = _classify_detection_tier(label)
+            frame_others.setdefault(frame_idx, []).append((cx, cy, tier_w * confidence))
 
-            cx, cy, w, h = bbox
-            combined_weight = tier_weight * confidence
+    frame_detected_poi: Dict[int, np.ndarray] = {}
 
-            if frame_idx not in frame_boxes:
-                frame_boxes[frame_idx] = []
-            frame_boxes[frame_idx].append((cx, cy, combined_weight))
+    for frame_idx in range(total_frames):
+        if frame_idx in frame_faces and len(frame_faces[frame_idx]) > 0:
+            # Strict Face-Centering Priority: ignore objects, monitors, and secondary saliency
+            best_face = max(frame_faces[frame_idx], key=lambda x: x[2])
+            frame_detected_poi[frame_idx] = np.array([best_face[0], best_face[1] - HEADROOM_BIAS_Y], dtype=np.float64)
+        elif frame_idx in frame_persons and len(frame_persons[frame_idx]) > 0:
+            # Fallback 1: Upper-body torso midpoint
+            best_person = max(frame_persons[frame_idx], key=lambda x: x[2])
+            frame_detected_poi[frame_idx] = np.array([best_person[0], best_person[1] - HEADROOM_BIAS_Y], dtype=np.float64)
+        elif frame_idx in frame_others and len(frame_others[frame_idx]) > 0:
+            # Fallback 2: Secondary detections weighted centroid
+            boxes = frame_others[frame_idx]
+            sum_w = sum(b[2] for b in boxes)
+            if sum_w > 1e-8:
+                sum_cx = sum(b[0] * b[2] for b in boxes)
+                sum_cy = sum(b[1] * b[2] for b in boxes)
+                frame_detected_poi[frame_idx] = np.array([sum_cx / sum_w, (sum_cy / sum_w) - HEADROOM_BIAS_Y], dtype=np.float64)
 
-    # Compute weighted centroid for frames that have detections
-    for frame_idx, boxes in frame_boxes.items():
-        sum_cx = sum(b[0] * b[2] for b in boxes)
-        sum_cy = sum(b[1] * b[2] for b in boxes)
-        sum_w = sum(b[2] for b in boxes)
+    # Zero-Lag Initial State:
+    # Find the first frame with valid detections and back-fill frames 0..first_frame
+    first_detected = None
+    for f in range(total_frames):
+        if f in frame_detected_poi:
+            first_detected = frame_detected_poi[f].copy()
+            break
 
-        if sum_w > 1e-8:
-            poi[frame_idx, 0] = sum_cx / sum_w
-            # Apply 4% upward headroom bias
-            poi[frame_idx, 1] = (sum_cy / sum_w) - HEADROOM_BIAS_Y
+    if first_detected is None:
+        first_detected = FALLBACK_POI.copy()
 
-    # Forward-fill gaps (frames without detections inherit from last known)
-    last_valid = FALLBACK_POI.copy()
-    for i in range(total_frames):
-        if i in frame_boxes and sum(b[2] for b in frame_boxes[i]) > 1e-8:
-            last_valid = poi[i].copy()
-        else:
-            poi[i] = last_valid
+    current_val = first_detected.copy()
+    for f in range(total_frames):
+        if f in frame_detected_poi:
+            current_val = frame_detected_poi[f].copy()
+        poi[f] = current_val.copy()
 
     return poi
 
@@ -129,21 +149,22 @@ def _extract_poi_for_focal_target(spatial_events: List[Any],
                                   fps: float,
                                   total_frames: int,
                                   focal_target: str) -> np.ndarray:
-    """Extracts per-frame POI filtered by focal_target semantics.
+    """Extracts per-frame POI filtered by focal_target semantics with Strict Face Priority & Zero-Lag.
 
     Focal target routing:
-        - SPEAKER_PRIMARY / SPEAKER_REACTION: Face/person detections (hierarchical weights)
-        - MONITOR_SCREEN: Monitor/laptop/TV/screen/display/cell phone detections only
-        - HELD_OBJECT: Small object + hands detections
-        - ACTION_SCENE: All detections equally weighted
-
-    Falls back to upper-center (0.50, 0.45) when no matching detections exist.
+        - SPEAKER_PRIMARY / SPEAKER_REACTION: Face (conf >= 0.45) strictly prioritized, then upper-torso.
+        - FOCAL_DISPLAY: Monitor/laptop/screen detections, fallback to face/person.
+        - HELD_OBJECT: Small object detections + hands, fallback to face/person.
+        - ACTION_SCENE: All detections equally weighted.
 
     Returns:
         np.ndarray of shape [total_frames, 2] — normalized (cx, cy) per frame.
     """
     poi = np.full((total_frames, 2), FALLBACK_POI, dtype=np.float64)
-    frame_boxes: Dict[int, List[Tuple[float, float, float]]] = {}
+
+    frame_target_boxes: Dict[int, List[Tuple[float, float, float]]] = {}
+    frame_faces: Dict[int, List[Tuple[float, float, float]]] = {}
+    frame_persons: Dict[int, List[Tuple[float, float, float]]] = {}
 
     for pe in spatial_events:
         if isinstance(pe, dict):
@@ -163,68 +184,78 @@ def _extract_poi_for_focal_target(spatial_events: List[Any],
         frame_idx = min(max(0, int(ts * fps)), total_frames - 1)
         cx, cy, w, h = bbox
 
-        # Filter detections based on focal target
-        include = False
-        weight = 1.0
+        if label in FACE_LABELS and confidence >= 0.45:
+            frame_faces.setdefault(frame_idx, []).append((cx, cy, confidence))
+        elif label in PERSON_LABELS and confidence >= 0.35:
+            head_cy = max(0.08, cy - 0.32 * h)
+            frame_persons.setdefault(frame_idx, []).append((cx, head_cy, confidence))
 
         target_cy = cy
+        include = False
+        weight = confidence
+
         if focal_target in ("SPEAKER_PRIMARY", "SPEAKER_REACTION"):
-            # Only face and person detections
-            if label in FACE_LABELS:
-                include = True
-                weight = 0.85 * confidence
-            elif label in PERSON_LABELS:
-                include = True
-                weight = 0.35 * confidence
-                # Head/face is located in the upper portion of the person bounding box
-                target_cy = max(0.08, cy - 0.32 * h)
+            # Handled by face/person priority check below
+            pass
         elif focal_target == "FOCAL_DISPLAY":
             if label in FOCAL_DISPLAY_LABELS:
                 include = True
                 weight = confidence
         elif focal_target == "HELD_OBJECT":
-            if label in HELD_OBJECT_LABELS or label in FACE_LABELS or label in PERSON_LABELS:
-                # Include hands/person for context, but weight objects higher
-                if label in HELD_OBJECT_LABELS:
-                    include = True
-                    weight = 0.80 * confidence
-                elif label in PERSON_LABELS:
-                    include = True
-                    weight = 0.20 * confidence
-                # Exclude face for held object — camera should be on hands/item
+            if label in HELD_OBJECT_LABELS:
+                include = True
+                weight = 0.90 * confidence
+            elif label in PERSON_LABELS:
+                include = True
+                weight = 0.10 * confidence
         elif focal_target == "ACTION_SCENE":
-            # All detections with equal weight
             include = True
             weight = confidence
         else:
-            # Unknown focal target — fall back to hierarchical
-            tier_weight, min_conf = _classify_detection_tier(label)
-            if confidence >= min_conf:
+            tier_w, min_c = _classify_detection_tier(label)
+            if confidence >= min_c:
                 include = True
-                weight = tier_weight * confidence
+                weight = tier_w * confidence
 
         if include:
-            if frame_idx not in frame_boxes:
-                frame_boxes[frame_idx] = []
-            frame_boxes[frame_idx].append((cx, target_cy, weight))
+            frame_target_boxes.setdefault(frame_idx, []).append((cx, target_cy, weight))
 
-    # Weighted centroid per frame
-    for frame_idx, boxes in frame_boxes.items():
-        sum_cx = sum(b[0] * b[2] for b in boxes)
-        sum_cy = sum(b[1] * b[2] for b in boxes)
-        sum_w = sum(b[2] for b in boxes)
+    frame_detected_poi: Dict[int, np.ndarray] = {}
 
-        if sum_w > 1e-8:
-            poi[frame_idx, 0] = sum_cx / sum_w
-            poi[frame_idx, 1] = (sum_cy / sum_w) - HEADROOM_BIAS_Y
-
-    # Forward-fill gaps
-    last_valid = FALLBACK_POI.copy()
-    for i in range(total_frames):
-        if i in frame_boxes and sum(b[2] for b in frame_boxes[i]) > 1e-8:
-            last_valid = poi[i].copy()
+    for frame_idx in range(total_frames):
+        if focal_target in ("SPEAKER_PRIMARY", "SPEAKER_REACTION"):
+            # Strict Face-Centering Priority
+            if frame_idx in frame_faces and len(frame_faces[frame_idx]) > 0:
+                best_face = max(frame_faces[frame_idx], key=lambda x: x[2])
+                frame_detected_poi[frame_idx] = np.array([best_face[0], best_face[1] - HEADROOM_BIAS_Y], dtype=np.float64)
+            elif frame_idx in frame_persons and len(frame_persons[frame_idx]) > 0:
+                best_person = max(frame_persons[frame_idx], key=lambda x: x[2])
+                frame_detected_poi[frame_idx] = np.array([best_person[0], best_person[1] - HEADROOM_BIAS_Y], dtype=np.float64)
         else:
-            poi[i] = last_valid
+            # Semantic focal target priority (FOCAL_DISPLAY, HELD_OBJECT, ACTION_SCENE, etc.)
+            if frame_idx in frame_target_boxes and len(frame_target_boxes[frame_idx]) > 0:
+                boxes = frame_target_boxes[frame_idx]
+                sum_w = sum(b[2] for b in boxes)
+                if sum_w > 1e-8:
+                    sum_cx = sum(b[0] * b[2] for b in boxes)
+                    sum_cy = sum(b[1] * b[2] for b in boxes)
+                    frame_detected_poi[frame_idx] = np.array([sum_cx / sum_w, (sum_cy / sum_w) - HEADROOM_BIAS_Y], dtype=np.float64)
+
+    # Zero-Lag Initial State: Back-fill frames 0..first_detected
+    first_detected = None
+    for f in range(total_frames):
+        if f in frame_detected_poi:
+            first_detected = frame_detected_poi[f].copy()
+            break
+
+    if first_detected is None:
+        first_detected = FALLBACK_POI.copy()
+
+    current_val = first_detected.copy()
+    for f in range(total_frames):
+        if f in frame_detected_poi:
+            current_val = frame_detected_poi[f].copy()
+        poi[f] = current_val.copy()
 
     return poi
 
@@ -279,8 +310,9 @@ def _rts_kalman_smooth(data: np.ndarray) -> np.ndarray:
     x_filt = np.zeros((n, 2))
     P_filt = np.zeros((n, 2, 2))
 
+    # Zero-Lag Initial State: Initialize directly at first frame target with tight covariance
     x_filt[0] = [data[0], 0.0]
-    P_filt[0] = np.eye(2) * 0.1
+    P_filt[0] = np.eye(2) * 0.01
 
     for k in range(1, n):
         x_pred[k] = F @ x_filt[k - 1]
@@ -312,9 +344,9 @@ def smooth_trajectory(raw_poi: np.ndarray,
     """Smoothes raw POI coordinates per shot using Savitzky-Golay or RTS Kalman.
 
     Enforces:
-        - Teleport (instant jump) across scene cut boundaries.
+        - Instantaneous teleport across scene cut boundaries (no smoothing across shots).
         - Fixed 9:16 crop width window clamping: cx in [cw/2, 1 - cw/2].
-        - 1D horizontal velocity clamping: <= 0.008 * W_src per tick.
+        - 1D horizontal velocity clamping: <= 0.008 * W_src per tick within shots.
         - Full-height lock: cy = 0.5 when lock_cy=True, or smoothed cy when lock_cy=False.
 
     Args:
@@ -337,6 +369,9 @@ def smooth_trajectory(raw_poi: np.ndarray,
         smoothed[:, 1] = raw_poi[:, 1].copy()
 
     shots = _identify_shot_boundaries(scene_cuts, total_frames)
+    scene_cut_set = set(scene_cuts)
+    for shot_start, _ in shots:
+        scene_cut_set.add(shot_start)
 
     for shot_start, shot_end in shots:
         shot_len = shot_end - shot_start
@@ -371,10 +406,9 @@ def smooth_trajectory(raw_poi: np.ndarray,
         smoothed[:, 1] = np.clip(smoothed[:, 1], 0.20, 0.80)
 
     # 1D Horizontal Pan Velocity Clamping (<= 0.008 * W_src per tick)
-    scene_cut_set = set(scene_cuts)
     for i in range(1, total_frames):
         if i in scene_cut_set:
-            continue
+            continue  # Instantaneous cut teleport: do NOT velocity clamp across shot boundaries
 
         dx = smoothed[i, 0] - smoothed[i - 1, 0]
         if abs(dx) > MAX_PAN_PER_TICK:
