@@ -88,14 +88,16 @@ class VideoSegment(BaseModel):
     segment_end: float
     target_track_id: int = Field(default=0, description="Speaker or track identifier")
     layout_mode: Literal[
-        "SPEAKER_SOLO", "SPLIT_STACK", "CONTENT_FIT",
-        "speaker_full", "split_screen", "FULL_SCREEN", "B_ROLL", "broll", "graphic"
+        "SMART_PORTRAIT_PAN", "CANVAS_GRAPHIC_FIT",
+        "SPEAKER_SOLO", "CONTENT_FIT", "speaker_full", "split_screen",
+        "SPLIT_STACK", "FULL_SCREEN", "B_ROLL", "broll", "graphic"
     ] = Field(
-        default="SPEAKER_SOLO",
-        description="Multi-Layout Semantic Framing Mode: "
-                    "'SPEAKER_SOLO' = Full 9:16 portrait crop centered on active speaker; "
-                    "'SPLIT_STACK' = 50/50 vertical split with speaker on top and screen/interaction on bottom; "
-                    "'CONTENT_FIT' = Full 16:9 graphic preservation centered vertically over blurred background."
+        default="SMART_PORTRAIT_PAN",
+        description="Universal 2-Mode Layout: "
+                    "'SMART_PORTRAIT_PAN' = Full-height 9:16 vertical crop (ch=1.0, cw=607.5px) "
+                    "with smoothed horizontal pan tracking the active speaker. Zero digital zoom. "
+                    "'CANVAS_GRAPHIC_FIT' = Uncropped 16:9 foreground (1080x608) centered vertically "
+                    "over a 45%-darkened Gaussian-blurred background. 100% text readability preserved."
     )
     focal_target: Literal[
         "SPEAKER_PRIMARY", "SPEAKER_REACTION", "FOCAL_DISPLAY",

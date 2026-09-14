@@ -264,12 +264,11 @@ class DebateGraph:
             "Directives:\n"
             "- Narrative: Each clip must be a SINGLE-TOPIC story arc — one self-contained premise with Premise -> Friction -> Conclusion. "
             "Do NOT create montage summaries or stitch disconnected windows.\n"
-            "- Clip duration: Sum of segments in each clip MUST be between 30.0 and 48.0 seconds (target ~40s; strictly NEVER exceed 48.0s).\n"
+            "- Clip duration: Sum of segments in each clip MUST be between 30.0 and 45.0 seconds (target ~38s; strictly NEVER exceed 45.0s).\n"
             "- Hook: First segment must start on a high-arousal/energy statement.\n"
-            "- Multi-Layout Framing (layout_mode per segment):\n"
-            "  * SPLIT_STACK: Assign whenever a human speaker is actively interacting with, reacting to, or discussing an on-screen display, game, software UI, or secondary subject (e.g. tech reviews, gaming, reaction streams, tutorials).\n"
-            "  * SPEAKER_SOLO: Assign when a single speaker is addressing the camera directly with no relevant visual display (e.g. stand-up comedy, monologue, single interview).\n"
-            "  * CONTENT_FIT: Assign when the focal point is a full-screen graphic, slide, newspaper article, or diagram where horizontal text must remain 100% readable.\n"
+            "- 2-Mode Universal Layout (layout_mode per segment):\n"
+            "  * SMART_PORTRAIT_PAN: Assign to ALL segments with a human presenter, dialogue, interviews, reactions, desk demonstrations, gaming, live action. This is the DEFAULT.\n"
+            "  * CANVAS_GRAPHIC_FIT: Assign ONLY when the primary visual content is a full-screen graphic, chart, website, document, or widescreen software UI with NO human presenter in-frame.\n"
             "- Focal Target: For every segment, assign focal_target from: SPEAKER_PRIMARY (someone speaking), "
             "SPEAKER_REACTION (listener reacting), FOCAL_DISPLAY (on-screen UI/game/monitor/phone/tablet), "
             "HELD_OBJECT (hands holding item), ACTION_SCENE (dynamic wide scene)."
@@ -281,12 +280,12 @@ class DebateGraph:
             f"{critique_context}\n\n"
             "Return JSON matching this schema:\n"
             "{\"clips\": [{\"segments\": [{\"segment_start\": float, \"segment_end\": float, "
-            "\"layout_mode\": \"SPEAKER_SOLO\"|\"SPLIT_STACK\"|\"CONTENT_FIT\", "
+            "\"layout_mode\": \"SMART_PORTRAIT_PAN\"|\"CANVAS_GRAPHIC_FIT\", "
             "\"focal_target\": \"SPEAKER_PRIMARY\"|\"SPEAKER_REACTION\"|\"FOCAL_DISPLAY\"|\"HELD_OBJECT\"|\"ACTION_SCENE\", "
             "\"emphasis_zoom\": bool}], "
             "\"hook_score\": float, \"retention_score\": float, \"cta_present\": bool, "
             "\"reasoning\": str (max 5 words), \"caption_text\": str (max 5 words)}]}. "
-            "You MUST return 4 to 5 clips, each with total duration between 30.0s and 48.0s (target 40s, strictly under 48s). Keep reasoning/caption_text extremely short (under 5 words)."
+            "You MUST return 4 to 5 clips, each with total duration between 30.0s and 45.0s (target 38s, strictly under 45s). Keep reasoning/caption_text extremely short (under 5 words)."
         )
 
         try:
@@ -309,7 +308,7 @@ class DebateGraph:
                 segs_data = c.get("segments", [])
                 segs = []
                 VALID_FOCAL_TARGETS = {"SPEAKER_PRIMARY", "SPEAKER_REACTION", "FOCAL_DISPLAY", "HELD_OBJECT", "ACTION_SCENE"}
-                VALID_LAYOUT_MODES = {"SPEAKER_SOLO", "SPLIT_STACK", "CONTENT_FIT"}
+                VALID_LAYOUT_MODES = {"SMART_PORTRAIT_PAN", "CANVAS_GRAPHIC_FIT"}
 
                 for s in segs_data:
                     raw_focal = str(s.get("focal_target", "SPEAKER_PRIMARY")).upper()
@@ -320,20 +319,11 @@ class DebateGraph:
                         raw_focal = "SPEAKER_PRIMARY"
 
                     raw_layout = str(s.get("layout_mode", "")).upper().strip()
-                    if raw_layout in ("SPLIT_STACK", "SPLIT_SCREEN"):
-                        norm_layout = "SPLIT_STACK"
-                    elif raw_layout in ("CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
-                        norm_layout = "CONTENT_FIT"
-                    elif raw_layout in ("SPEAKER_SOLO", "SPEAKER_FULL"):
-                        norm_layout = "SPEAKER_SOLO"
+                    if raw_layout in ("CANVAS_GRAPHIC_FIT", "CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
+                        norm_layout = "CANVAS_GRAPHIC_FIT"
                     else:
-                        # Infer intelligent default from focal_target
-                        if raw_focal in ("FOCAL_DISPLAY", "HELD_OBJECT"):
-                            norm_layout = "SPLIT_STACK"
-                        elif raw_focal == "ACTION_SCENE":
-                            norm_layout = "CONTENT_FIT"
-                        else:
-                            norm_layout = "SPEAKER_SOLO"
+                        # SMART_PORTRAIT_PAN is the universal default for all human-presenter content
+                        norm_layout = "SMART_PORTRAIT_PAN"
 
                     segs.append(VideoSegment(
                         segment_start=float(s.get("segment_start", 0.0)),
@@ -347,13 +337,9 @@ class DebateGraph:
                 # Enforce chronological segment sorting
                 segs = sorted(segs, key=lambda s: s.segment_start)
                 
-                # Keyword Intercept Gate — assign appropriate focal_target & layout_mode
-                held_object_keywords = {"screws", "unscrew", "keyboard", "numpad", "battery",
-                                        "motherboard", "power brick", "holding", "hands", "fingerprint"}
-                focal_display_keywords = {"display", "monitor", "screen", "game", "laptop",
-                                          "desktop", "ui", "interface", "ports", "inside"}
-                content_fit_keywords = {"slide", "document", "article", "wikipedia", "diagram",
-                                        "chart", "graphic", "whitepaper", "infographic"}
+                # Keyword Intercept Gate — assign CANVAS_GRAPHIC_FIT only for pure graphic/document content
+                canvas_graphic_keywords = {"slide", "document", "article", "wikipedia", "diagram",
+                                           "chart", "graphic", "whitepaper", "infographic"}
 
                 ft = fused_timeline if isinstance(fused_timeline, dict) else (
                     fused_timeline.model_dump() if hasattr(fused_timeline, "model_dump") else {}
@@ -365,16 +351,8 @@ class DebateGraph:
                         ts = get_item_field(entry, "timestamp", 0.0)
                         if s.segment_start <= ts <= s.segment_end:
                             w = str(get_item_field(entry, "word", "")).lower().strip(".,!?\"'")
-                            if w in held_object_keywords:
-                                s.focal_target = "HELD_OBJECT"
-                                s.layout_mode = "SPLIT_STACK"
-                                break
-                            elif w in focal_display_keywords:
-                                s.focal_target = "FOCAL_DISPLAY"
-                                s.layout_mode = "SPLIT_STACK"
-                                break
-                            elif w in content_fit_keywords:
-                                s.layout_mode = "CONTENT_FIT"
+                            if w in canvas_graphic_keywords:
+                                s.layout_mode = "CANVAS_GRAPHIC_FIT"
                                 break
 
                 clips.append(ClipManifest(
@@ -584,12 +562,10 @@ class DebateGraph:
                     
                     # Normalize layout mode in director check
                     norm_layout = str(layout_mode).upper().strip()
-                    if norm_layout in ("SPLIT_STACK", "SPLIT_SCREEN"):
-                        norm_layout = "SPLIT_STACK"
-                    elif norm_layout in ("CONTENT_FIT", "BROLL", "GRAPHIC"):
-                        norm_layout = "CONTENT_FIT"
+                    if norm_layout in ("CANVAS_GRAPHIC_FIT", "CONTENT_FIT", "BROLL", "GRAPHIC"):
+                        norm_layout = "CANVAS_GRAPHIC_FIT"
                     else:
-                        norm_layout = "SPEAKER_SOLO"
+                        norm_layout = "SMART_PORTRAIT_PAN"
                         
                     if camera_target == "SPEAKER_FACE":
                         continuous_face_duration += seg_dur
@@ -763,6 +739,16 @@ class DebateGraph:
                     else:
                         clamped_segs.append(s)
                         total_dur += dur
+
+                # Strictly normalize layout_mode to 2-Mode Standard: SMART_PORTRAIT_PAN or CANVAS_GRAPHIC_FIT
+                for s in clamped_segs:
+                    cur_layout = getattr(s, "layout_mode", "SMART_PORTRAIT_PAN") if hasattr(s, "layout_mode") else s.get("layout_mode", "SMART_PORTRAIT_PAN")
+                    norm_l = str(cur_layout).upper().strip()
+                    target_l = "CANVAS_GRAPHIC_FIT" if norm_l in ("CANVAS_GRAPHIC_FIT", "CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL") else "SMART_PORTRAIT_PAN"
+                    if hasattr(s, "layout_mode"):
+                        s.layout_mode = target_l
+                    else:
+                        s["layout_mode"] = target_l
 
                 if hasattr(clip, "segments"):
                     clip.segments = clamped_segs

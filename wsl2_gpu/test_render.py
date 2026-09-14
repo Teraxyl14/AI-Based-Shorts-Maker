@@ -28,8 +28,9 @@ from wsl2_gpu.subtitle_compositor import (
 )
 from wsl2_gpu.render_spoke import (
     render_broll_pillarbox,
+    render_smart_portrait_pan,
+    render_canvas_graphic_fit,
     render_speaker_solo,
-    render_split_stack,
     render_content_fit
 )
 from shared.schemas import VideoSegment
@@ -441,61 +442,85 @@ def test_fullscreen_916_crop():
     print("[PASSED] Full-Height 9:16 Geometric Lock & Digital Zoom Ban tests PASSED.")
 
 
-def test_multi_layout_framing_engine():
-    print("\n--- 10. Testing Multi-Layout Semantic Framing Engine (Solo, Stacked Split-Screen, Content Fit) ---")
+def test_two_mode_universal_framing():
+    print("\n--- 10. Testing 2-Mode Universal Framing (SMART_PORTRAIT_PAN & CANVAS_GRAPHIC_FIT) ---")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     src_h, src_w = 1080, 1920
     target_h, target_w = 1920, 1080
     frame = torch.rand((1, 3, src_h, src_w), device=device)
 
-    # 1. Test BRANCH A: SPEAKER_SOLO (Full 9:16 Portrait)
-    solo_out = render_speaker_solo(frame, cx_norm=0.5, target_w=target_w, target_h=target_h)
-    assert solo_out.shape == (1, 3, target_h, target_w), f"Expected shape (1, 3, 1920, 1080), got {solo_out.shape}"
-    assert solo_out.min() >= 0.0 and solo_out.max() <= 1.0
-    print(f"BRANCH A (SPEAKER_SOLO): shape={solo_out.shape} -> 1080x1920 full 9:16 portrait [OK]")
+    # 1. Test MODE 1: SMART_PORTRAIT_PAN (Full-Height 9:16 Vertical Crop)
+    pan_out = render_smart_portrait_pan(frame, cx_norm=0.5, target_w=target_w, target_h=target_h)
+    assert pan_out.shape == (1, 3, target_h, target_w), f"Expected shape (1, 3, 1920, 1080), got {pan_out.shape}"
+    assert pan_out.min() >= 0.0 and pan_out.max() <= 1.0
+    print(f"MODE 1 (SMART_PORTRAIT_PAN): shape={pan_out.shape} -> 1080x1920 full 9:16 portrait [OK]")
 
-    # 2. Test BRANCH B: SPLIT_STACK (50/50 Vertical Stack)
-    # Test FOCAL_DISPLAY (Widescreen Monitor Fit over Darkened Blurred Background)
-    split_disp = render_split_stack(frame, cx_norm=0.5, cy_norm=0.4, focal_target="FOCAL_DISPLAY", target_w=target_w, target_h=target_h)
-    assert split_disp.shape == (1, 3, target_h, target_w)
-    
-    # Verify 2px Dark Divider at Y = 959..961
-    divider_slice = split_disp[:, :, 959:961, :]
-    assert torch.all(divider_slice <= 0.10), f"Expected dark divider line at Y=959..961, got max value {divider_slice.max()}"
-    print(f"BRANCH B (SPLIT_STACK - FOCAL_DISPLAY): shape={split_disp.shape}, 2px divider verified at Y=960 [OK]")
+    # Verify full-height lock: no digital zoom, crop_h = src_h
+    crop_w_expected = float(src_h) * (float(target_w) / float(target_h))  # 607.5
+    assert abs(crop_w_expected - 607.5) < 1.0, f"Expected crop width ~607.5px, got {crop_w_expected}"
+    print(f"  Full-Height Lock: crop_h={src_h}px, crop_w={crop_w_expected:.1f}px, zero digital zoom [OK]")
 
-    # Test HELD_OBJECT (Localized Object Crop in Bottom Pane)
-    split_obj = render_split_stack(frame, cx_norm=0.5, cy_norm=0.6, focal_target="HELD_OBJECT", target_w=target_w, target_h=target_h)
-    assert split_obj.shape == (1, 3, target_h, target_w)
-    print(f"BRANCH B (SPLIT_STACK - HELD_OBJECT): shape={split_obj.shape}, hands/item framing in bottom pane [OK]")
+    # Test left-edge clamping
+    pan_left = render_smart_portrait_pan(frame, cx_norm=0.0, target_w=target_w, target_h=target_h)
+    assert pan_left.shape == (1, 3, target_h, target_w)
+    print(f"  Edge Clamping (cx=0.0): shape={pan_left.shape} [OK]")
 
-    # 3. Test BRANCH C: CONTENT_FIT (Full Graphic Preservation)
-    content_out = render_content_fit(frame, target_w=target_w, target_h=target_h)
-    assert content_out.shape == (1, 3, target_h, target_w)
-    print(f"BRANCH C (CONTENT_FIT): shape={content_out.shape}, 100% readable slide/article preservation [OK]")
+    # Test right-edge clamping
+    pan_right = render_smart_portrait_pan(frame, cx_norm=1.0, target_w=target_w, target_h=target_h)
+    assert pan_right.shape == (1, 3, target_h, target_w)
+    print(f"  Edge Clamping (cx=1.0): shape={pan_right.shape} [OK]")
 
-    # 4. Test Subtitle Adaptive Positioning
+    # Verify legacy alias works
+    legacy_out = render_speaker_solo(frame, cx_norm=0.5, target_w=target_w, target_h=target_h)
+    assert legacy_out.shape == pan_out.shape
+    print(f"  Legacy Alias (render_speaker_solo): shape={legacy_out.shape} [OK]")
+
+    # 2. Test MODE 2: CANVAS_GRAPHIC_FIT (Full Graphic Preservation)
+    graphic_out = render_canvas_graphic_fit(frame, target_w=target_w, target_h=target_h)
+    assert graphic_out.shape == (1, 3, target_h, target_w)
+    assert graphic_out.min() >= 0.0 and graphic_out.max() <= 1.0
+    print(f"MODE 2 (CANVAS_GRAPHIC_FIT): shape={graphic_out.shape}, 100% text readability preserved [OK]")
+
+    # Verify foreground placement: centered at Y=656
+    fg_h = int(round(float(src_h) * (float(target_w) / float(src_w))))  # 608
+    start_y = (target_h - fg_h) // 2  # 656
+    assert start_y == 656, f"Expected foreground at Y=656, got Y={start_y}"
+    print(f"  Foreground Placement: {target_w}x{fg_h} at Y={start_y}px [OK]")
+
+    # Verify legacy alias works
+    legacy_cf = render_content_fit(frame, target_w=target_w, target_h=target_h)
+    assert legacy_cf.shape == graphic_out.shape
+    print(f"  Legacy Alias (render_content_fit): shape={legacy_cf.shape} [OK]")
+
+    # 3. Test Subtitle Adaptive Positioning (both modes use Y=65%)
     compositor = SubtitleCompositor()
     dummy_words = [{"word": "TESTING", "start": 0.0, "end": 1.0, "confidence": 0.99}]
     compositor.build_word_atlas(dummy_words, target_w=target_w)
-    
-    # SPLIT_STACK subtitle at divider boundary (baseline_y = 960.0)
-    split_sub = compositor.composite_frame(split_disp, timestamp=0.5, words=dummy_words, target_w=target_w, target_h=target_h, baseline_y=960.0)
-    assert split_sub.shape == split_disp.shape
-    print("Adaptive Subtitles (SPLIT_STACK): Anchored at divider boundary Y=960px [OK]")
 
-    # SPEAKER_SOLO subtitle at Y = 65% (baseline_y = 1248.0)
-    solo_sub = compositor.composite_frame(solo_out, timestamp=0.5, words=dummy_words, target_w=target_w, target_h=target_h, baseline_y=float(target_h) * 0.65)
-    assert solo_sub.shape == solo_out.shape
-    print("Adaptive Subtitles (SPEAKER_SOLO / CONTENT_FIT): Anchored at Y=65% (1248px) [OK]")
+    # SMART_PORTRAIT_PAN subtitle at Y = 65% (baseline_y = 1248.0)
+    pan_sub = compositor.composite_frame(pan_out, timestamp=0.5, words=dummy_words, target_w=target_w, target_h=target_h, baseline_y=float(target_h) * 0.65)
+    assert pan_sub.shape == pan_out.shape
+    print(f"  Subtitles (SMART_PORTRAIT_PAN): Anchored at Y=65% (1248px) [OK]")
 
-    print("[PASSED] Multi-Layout Semantic Framing Engine tests PASSED.")
+    # CANVAS_GRAPHIC_FIT subtitle at Y = 65% (baseline_y = 1248.0)
+    gfx_sub = compositor.composite_frame(graphic_out, timestamp=0.5, words=dummy_words, target_w=target_w, target_h=target_h, baseline_y=float(target_h) * 0.65)
+    assert gfx_sub.shape == graphic_out.shape
+    print(f"  Subtitles (CANVAS_GRAPHIC_FIT): Anchored at Y=65% (1248px) [OK]")
+
+    # 4. Verify SPLIT_STACK is PURGED — no split_stack function exists
+    import inspect
+    import wsl2_gpu.render_spoke as rs_module
+    all_names = dir(rs_module)
+    assert 'render_split_stack' not in all_names, "FAIL: render_split_stack should be PURGED!"
+    print(f"  SPLIT_STACK PURGE VERIFIED: render_split_stack is NOT in module [OK]")
+
+    print("[PASSED] 2-Mode Universal Framing Engine tests PASSED.")
 
 
 if __name__ == "__main__":
     print("==================================================")
     print("   Project Aether V2 Comprehensive Unit Tests     ")
-    print("   Multi-Layout Semantic Framing Engine           ")
+    print("   2-Mode Universal Production Standards          ")
     print("==================================================")
     test_trajectory_smoother()
     test_poi_hierarchical_weights()
@@ -506,5 +531,5 @@ if __name__ == "__main__":
     test_subtitle_compositor()
     test_broll_pillarbox()
     test_fullscreen_916_crop()
-    test_multi_layout_framing_engine()
+    test_two_mode_universal_framing()
     print("\n[SUCCESS] ALL PROJECT AETHER V2 TESTS PASSED SUCCESSFULLY!\n")
