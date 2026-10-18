@@ -426,11 +426,11 @@ def run_phase2_vlm_editorial_worker(video_path: str, words_data: list,
         from wsl2_gpu.fusion_consumer import extract_transcript_beats
         full_beats = extract_transcript_beats(words_data, spatial_data)
 
-        # Enforce minimum 50s duration & narrative multi-segment bounds
+        # Enforce minimum 50s duration & maximum 60s (1 minute) bounds
         min_dur = float(os.getenv("AETHER_MIN_SHORT_DURATION", "50.0"))
-        max_dur = float(os.getenv("AETHER_MAX_SHORT_DURATION", "90.0"))
-        target_dur = float(os.getenv("AETHER_TARGET_SHORT_DURATION", "60.0"))
-        min_start = float(os.getenv("AETHER_MIN_START_TIME", "20.0"))
+        max_dur = float(os.getenv("AETHER_MAX_SHORT_DURATION", "60.0"))
+        target_dur = float(os.getenv("AETHER_TARGET_SHORT_DURATION", "55.0"))
+        min_start = float(os.getenv("AETHER_MIN_START_TIME", "60.0"))
 
         editorial = EditorialEngine(
             min_duration=min_dur,

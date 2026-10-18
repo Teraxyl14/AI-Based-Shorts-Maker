@@ -476,7 +476,7 @@ class EngagementEvaluator:
 
                 # Verify genuine visual separation between speaker and topic (avoid duplicate identical panes)
                 bbox_distance = math.hypot(spk_bbox[0] - topic_bbox[0], spk_bbox[1] - topic_bbox[1])
-                is_distinct_topic = (has_topic and bbox_distance >= 0.28)
+                is_distinct_topic = (has_topic and bbox_distance >= 0.30)
 
                 # Selective split-screen accent: prevent continuous overuse across whole clip
                 recent_split_count = sum(1 for seg in out_segments[-3:] if getattr(seg, 'layout_mode', '') == CutLayoutMode.DUAL_PANE_SPLIT_SCREEN)
@@ -592,15 +592,30 @@ class EngagementEvaluator:
                                 reason=f"Showcase {b_cat}: {b_summary}"
                             ))
                         else:
-                            if has_speaker and is_distinct_topic:
-                                # When both speaker and topic exist, alternate with split-screen so topic is never lost
+                            if has_speaker and is_distinct_topic and bbox_distance >= 0.30:
+                                # When both speaker and topic exist with verified distance, alternate with split-screen
+                                split_cfg = cfg or SplitScreenConfig(
+                                    top_pane_target="SPEAKER",
+                                    bottom_pane_target="TOPIC",
+                                    split_ratio=0.50,
+                                    divider_width_px=4,
+                                    divider_accent_hex="#CCFF00",
+                                    divider_glow_radius=6,
+                                    corner_radius_px=16,
+                                    shadow_blur_px=10,
+                                )
                                 alt_seg = VideoSegment(
                                     segment_start=cur_demo_t,
                                     segment_end=nxt_t,
                                     layout_mode=CutLayoutMode.DUAL_PANE_SPLIT_SCREEN,
                                     focal_target="ACTION_SCENE",
-                                    grounded_target=grounded_tgt,
-                                    split_screen_config=cfg,
+                                    grounded_target=VisualGroundingTarget(
+                                        target_type="ACTION_SCENE",
+                                        primary_bbox=topic_bbox,
+                                        secondary_bbox=spk_bbox,
+                                        confidence=0.95
+                                    ),
+                                    split_screen_config=split_cfg,
                                     beat_id=b_id
                                 )
                                 out_segments.append(alt_seg)
@@ -736,6 +751,7 @@ class EngagementEvaluator:
         clip_dur = (clip_end - clip_start) if clip_end > clip_start else 1000.0
 
         human_verified = False
+        topic_verified = False
         for pe in spatial_events:
             if isinstance(pe, dict):
                 ts = float(pe.get("timestamp", 0.0))
@@ -760,16 +776,20 @@ class EngagementEvaluator:
                     has_speaker = True
                     speaker_bbox = bbox
                 elif lbl in ITEM_LABELS or action_lbl == "held_product" or lbl == "demonstration_action":
+                    topic_verified = True
                     has_topic = True
                     topic_bbox = bbox
 
-        if spatial_events and not human_verified:
-            has_speaker = False
+        if spatial_events:
+            if not human_verified:
+                has_speaker = False
+            if not topic_verified:
+                has_topic = False
 
         # Ensure topic and speaker are not the exact same detection (avoid duplicate identical panes)
         if has_speaker and has_topic:
             dist = math.hypot(speaker_bbox[0] - topic_bbox[0], speaker_bbox[1] - topic_bbox[1])
-            if dist < 0.28:
+            if dist < 0.30:
                 has_topic = False
 
         return has_speaker, has_topic, speaker_bbox, topic_bbox

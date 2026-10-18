@@ -23,6 +23,10 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import torch
 import numpy as np
+try:
+    import kornia
+except ImportError:
+    kornia = None
 
 logger = logging.getLogger("AetherGPUCompositor")
 
@@ -921,6 +925,11 @@ def render_dual_pane_split_screen(frame: torch.Tensor,
     B, C, src_h, src_w = frame.shape
     device = frame.device
 
+    # Ensure genuine spatial separation between speaker and topic (avoid duplicate panes)
+    if abs(speaker_cx - topic_cx) < 0.30:
+        from wsl2_gpu.render_spoke import render_smart_portrait_pan
+        return render_smart_portrait_pan(frame, cx_norm=speaker_cx, target_w=target_w, target_h=target_h)
+
     div_th = getattr(config, "divider_width_px", 4) if config else 4
     split_r = getattr(config, "split_ratio", 0.50) if config else 0.50
     glow_r = getattr(config, "divider_glow_radius", 6) if config else 6
@@ -969,8 +978,21 @@ def render_dual_pane_split_screen(frame: torch.Tensor,
         bot_cropped, size=(bot_h, target_w), mode='bilinear', align_corners=False
     )
 
-    # Assemble canvas
-    canvas = torch.zeros((B, C, target_h, target_w), dtype=torch.float32, device=device)
+    # Assemble canvas with full-bleed Gaussian blurred cover background (zero black borders)
+    scale_cover = max(float(target_w) / float(src_w), float(target_h) / float(src_h))
+    bg_w = int(round(src_w * scale_cover))
+    bg_h = int(round(src_h * scale_cover))
+    bg_scaled = torch.nn.functional.interpolate(frame, size=(bg_h, bg_w), mode='bilinear', align_corners=False)
+    start_x_bg = (bg_w - target_w) // 2
+    start_y_bg = (bg_h - target_h) // 2
+    bg_cropped = bg_scaled[:, :, start_y_bg:start_y_bg + target_h, start_x_bg:start_x_bg + target_w]
+    bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
+    if kornia is not None:
+        bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(12.0, 12.0), border_type='replicate')
+    else:
+        bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=7, stride=1, padding=3, count_include_pad=False)
+    bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    canvas = bg_blurred * 0.85
     canvas[:, :, :top_h, :] = top_pane
     canvas[:, :, target_h - bot_h:, :] = bot_pane
 

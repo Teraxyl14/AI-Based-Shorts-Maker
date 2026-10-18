@@ -349,12 +349,12 @@ class Orchestrator:
     def _generate_fallback_shorts(self, video_duration: float,
                                   existing: Optional[List[Dict[str, Any]]] = None,
                                   needed: int = 4) -> List[Dict[str, Any]]:
-        """Generates fallback editorial shorts to guarantee at least 4 shorts (>= 50s each)."""
+        """Generates fallback editorial shorts to guarantee at least 4 shorts (50.0s-60.0s each)."""
         existing = existing or []
         shorts = []
         start = 60.0
         avail_end = max(start, video_duration - 1.0)
-        target_dur = 50.0 if (avail_end - start) >= (needed * 50.0) else max(30.0, min(50.0, (avail_end - start) / float(max(1, needed))))
+        target_dur = 55.0 if (avail_end - start) >= (needed * 55.0) else max(50.0, min(60.0, (avail_end - start) / float(max(1, needed))))
         slots = max(needed, int((avail_end - start) / target_dur))
         step = (avail_end - start - target_dur) / max(1, slots - 1) if slots > 1 else 0.0
 
@@ -372,7 +372,7 @@ class Orchestrator:
             if s_end > avail_end:
                 s_end = avail_end
                 s_start = s_end - target_dur
-            if s_start < 60.0 or (s_end - s_start) < 30.0:
+            if s_start < 60.0 or (s_end - s_start) < 50.0:
                 continue
             if not collides(s_start, s_end):
                 shorts.append({

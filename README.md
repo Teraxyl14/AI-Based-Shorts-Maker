@@ -20,13 +20,17 @@
 ## ⚡ Highlights & Key Innovations
 
 - **Universal Multi-Layout Semantic Framing Engine**:
-  - **Mode 1 — Smart Portrait Pan with Adaptive Face Headroom**: Dynamically senses face bounding box scale. Wide/medium shots receive a 100% full-bleed 9:16 vertical crop. Close-up shots widen the crop by 25% with slim ~10% Gaussian-blurred top/bottom bands, preserving natural shoulders and comfortable breathing room.
+  - **Mode 1 — Smart Portrait Pan with Adaptive Face Headroom**: Dynamically senses face bounding box scale. Wide/medium shots receive a 100% full-bleed 9:16 vertical crop. Close-up shots widen the crop by 25% with vibrant 85% luminance Gaussian-blurred top/bottom bands, preserving natural shoulders and comfortable breathing room with zero solid black borders.
   - **Mode 2 — Full-Frame Topic & Screencast Close-Up**: Software windows, desktop recordings, monitors, maps, gameplay, and demonstrated items render in complete **9:16 vertical ratio** centered on active UI elements and cursor movements without letterbox padding.
-  - **Mode 3 — Dual-Pane Split-Screen with Neon Glowing Divider**: Automatically pairs verified speakers with active demonstration topics using a styled 4px `#CCFF00` neon glowing divider. Gated by strict spatial separation ($\text{IoU} < 0.05$, Euclidean distance $\ge 0.28$) to eliminate duplicate identical presenter panes.
-- **Anti-Hunting Kinematic Dead-Zone Stabilization**:
+  - **Mode 3 — Dual-Pane Split-Screen with Neon Glowing Divider**: Automatically pairs verified speakers with active demonstration topics using a styled 4px `#CCFF00` neon glowing divider. Gated by strict spatial separation ($\text{IoU} < 0.05$, Euclidean distance $\ge 0.30$) with automatic fallback to portrait pan to completely eliminate duplicate identical presenter panes.
+- **Tripod-Locked Kinematic Dead-Zone Stabilization**:
   - Virtual camera pan paths are optimized via **OSQP Quadratic Programming**:
     $$\min_{x} \sum_{t} (x_t - p_t)^2 + \lambda_v (x_t - x_{t-1})^2 + \lambda_a (x_{t+1} - 2x_t + x_{t-1})^2$$
-  - Anchored $\pm 35\text{px}$ kinematic dead-zone filter suppresses natural presenter head bobbing and detection noise, producing silky, human-like camera motion without camera hunting or jitter.
+  - Anchored $\pm 65\text{px}$ kinematic dead-zone filter with regularized motion penalties ($\lambda_v = 50.0, \lambda_a = 90.0$) and gestural jerk suppression clamps camera velocity to 0.0 during presenter dialogue, behaving like an operator on a rock-steady tripod.
+- **Micro-Stutter Free Continuous Stream Decoding**:
+  - Slices and streams contiguous editorial cuts in a single continuous NVDEC decode process, completely bypassing keyframe seeking and frame re-initialization artifacts to eliminate 1-frame flashes between scene transitions.
+- **Strict 50s–60s Viral Pacing & Duration Bounds**:
+  - Automatically identifies and bounds narrative story arcs strictly within $[50.0\text{s}, 60.0\text{s}]$ (max 1 minute, minimum 50 seconds), perfectly aligned with platform monetization and viewer retention algorithms.
 - **Deterministic In-Video Sponsor & Fluff Exclusion Scanner**:
   - Comprehensive regex and multi-word token scanner (`detect_sponsor_segments`) detects paid promotions, brand integrations, and channel pitch intervals, applying temporal safety padding to guarantee candidate shorts are 100% sponsor-free.
 - **Autonomous Viral Pacing & Self-Correction Loop**:
@@ -66,7 +70,7 @@
    │                                           ▼ VRAM Sanitization (torch.cuda.empty_cache) │
    │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
    │   │  Phase 3: Subprocess GPU Compositing & Render (~4.2 GB Peak VRAM)              │   │
-   │   │  • OSQP 2D Convex Trajectory Solver + Anchored ±35px Kinematic Dead-Zone       │   │
+   │   │  • OSQP 2D Convex Trajectory Solver + Anchored ±65px Kinematic Dead-Zone       │   │
    │   │  • EngagementEvaluator Autonomous Pacing Self-Correction Loop                  │   │
    │   │  • Universal 3-Mode GPU Compositor (Portrait Pan / Split-Screen / Topic)       │   │
    │   │  • Kinetic Subtitle Glyph Atlas (Word-by-word active pop highlight)           │   │
@@ -210,7 +214,7 @@ docker exec aether-orchestrator pytest tests/ -q
 │   ├── vision_spoke.py             # Kornia scene detection + YOLO11s-Pose tracking
 │   ├── editorial_engine.py         # Sponsor scanner + multimodal VLM short selection
 │   ├── engagement_evaluator.py     # 11-rule viral pacing self-correction loop
-│   ├── trajectory_solver.py        # OSQP 2D trajectory solver + ±35px dead-zone filter
+│   ├── trajectory_solver.py        # OSQP 2D trajectory solver + ±65px dead-zone filter
 │   ├── trajectory_smoother.py      # RTS Kalman & Savitzky-Golay smoothing fallbacks
 │   ├── gpu_compositor.py           # 3-mode GPU tensor compositor (portrait, split, topic)
 │   ├── render_spoke.py             # 3-thread lock-free video renderer & subtitle burner

@@ -94,7 +94,7 @@ def render_smart_portrait_pan(frame: torch.Tensor, cx_norm: float,
         else:
             bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=7, stride=1, padding=3, count_include_pad=False)
         bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
-        canvas = bg_blurred * 0.50
+        canvas = bg_blurred * 0.85
 
         start_y_fg = max(0, (target_h - fg_h) // 2)
         end_y_fg = min(target_h, start_y_fg + fg_h)
@@ -228,7 +228,7 @@ def render_canvas_uncertainty_fit(frame: torch.Tensor,
     else:
         bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=9, stride=1, padding=4, count_include_pad=False)
     bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
-    layer1 = bg_blurred * 0.50
+    layer1 = bg_blurred * 0.85
 
     # Layer 2: 100% width uncropped 16:9 foreground (zero side margins)
     fg_w = target_w
@@ -791,16 +791,27 @@ class ThreeThreadRenderPipeline:
     def _decode_thread(self, source_path: str, src_w: int, src_h: int):
         try:
             slot = 0
-            for seg_idx, seg in enumerate(self.clip.segments):
+            # Identify continuous intervals across segments to eliminate FFmpeg restarts and 1-frame keyframe seek flashes
+            continuous_intervals = []
+            for seg in self.clip.segments:
                 seg_start = seg.segment_start if hasattr(seg, "segment_start") else seg.get("segment_start", 0.0)
                 seg_end = seg.segment_end if hasattr(seg, "segment_end") else seg.get("segment_end", 0.0)
-                
+                if not continuous_intervals:
+                    continuous_intervals.append([seg_start, seg_end])
+                else:
+                    last = continuous_intervals[-1]
+                    if abs(seg_start - last[1]) <= 0.05:
+                        last[1] = max(last[1], seg_end)
+                    else:
+                        continuous_intervals.append([seg_start, seg_end])
+
+            for int_start, int_end in continuous_intervals:
                 cmd = [
                     "ffmpeg", "-y",
                     "-hwaccel", "nvdec",
                     "-extra_hw_frames", "2",
-                    "-ss", f"{seg_start:.3f}",
-                    "-to", f"{seg_end:.3f}",
+                    "-ss", f"{int_start:.3f}",
+                    "-to", f"{int_end:.3f}",
                     "-i", source_path,
                     "-f", "rawvideo", "-pix_fmt", "rgb24",
                     "pipe:1"

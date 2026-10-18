@@ -38,8 +38,8 @@ KEYFRAME_QUALITY = 70  # JPEG quality
 
 # Editorial constraints
 MIN_START_TIME = 60.0   # Hard rejection of intro teasers (t < 60.0s)
-MIN_DURATION = 30.0
-MAX_DURATION = 50.0     # Strictly 30.0s <= dur <= 50.0s
+MIN_DURATION = float(os.getenv("AETHER_MIN_SHORT_DURATION", "30.0"))
+MAX_DURATION = float(os.getenv("AETHER_MAX_SHORT_DURATION", "50.0"))     # Overridden dynamically in production (50.0s-60.0s)
 TARGET_SHORTS = 4
 MAX_HOOK_DELAY = 1.5    # First spoken word must occur <= 1.5s into clip
 HOOK_WINDOW = 5.0       # Hook detection window (0 to 5s)
@@ -615,7 +615,7 @@ class EditorialEngine:
                 f"SELECT exactly {TARGET_SHORTS} non-overlapping narrative arcs for YouTube Shorts. "
                 f"Each short MUST:\n"
                 f"- Start at {MIN_START_TIME:.1f}s or later (strictly t >= 60.0s, NO intro teasers/montages)\n"
-                f"- Be {MIN_DURATION:.0f}-{MAX_DURATION:.0f} seconds long (strictly 30.0s to 50.0s)\n"
+                f"- Be {self.min_duration:.0f}-{self.max_duration:.0f} seconds long (strictly {self.min_duration:.1f}s to {self.max_duration:.1f}s, max 1 minute)\n"
                 f"- Follow the 3-act narrative structure: Hook (0-5s, first spoken word <= 1.5s) → Escalation → Payoff (ending on a sentence boundary)\n"
                 f"- Be a self-contained single-topic story segment (strictly NO chronological summary montages across disjoint scenes)\n\n"
                 f"STRICT NEGATIVE CONSTRAINT (ZERO AD/SPONSOR CONTENT):\n"
@@ -624,7 +624,7 @@ class EditorialEngine:
                 f"EPISODIC CONTINUITY RULE:\n"
                 f"- Every selected short MUST follow ONE continuous person, act, joke, or performance.\n"
                 f"- DO NOT combine scenes featuring completely different contestants or stage acts into the same clip.\n"
-                f"- If the video contains multiple performers, select a {MIN_DURATION:.0f}-{MAX_DURATION:.0f}s window that starts and finishes within the SAME performer's segment.\n\n"
+                f"- If the video contains multiple performers, select a {self.min_duration:.0f}-{self.max_duration:.0f}s window that starts and finishes within the SAME performer's segment.\n\n"
                 f"TRANSCRIPT:\n{transcript_text}\n\n"
                 f"KEYFRAMES (shot midpoints):\n"
             )
@@ -749,7 +749,7 @@ class EditorialEngine:
 
         Enforces:
             - Hard rejection of intro teasers: start_time strictly >= 60.0s (MIN_START_TIME)
-            - Duration bounds: strictly [30.0, 50.0] seconds
+            - Duration bounds: strictly [50.0, 60.0] seconds (max 1 minute)
             - Narrative arc Hook: first spoken word must occur <= 1.5s into the clip (0-5s window)
             - Narrative arc Payoff: clean sentence or word boundary snap (no mid-sentence cuts)
             - Non-overlapping arcs
@@ -933,6 +933,10 @@ class EditorialEngine:
 
         if needed <= 0 or video_duration < (min_start + min_dur):
             return fallback_results
+
+        avail_capacity = video_duration - min_start
+        if avail_capacity < (needed * min_dur):
+            min_dur = max(30.0, avail_capacity / float(max(1, needed)))
 
         def collides(start_s: float, end_s: float) -> bool:
             for s in existing + fallback_results:

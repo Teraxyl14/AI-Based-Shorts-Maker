@@ -28,8 +28,8 @@ TORSO_WEIGHT = 0.25
 ITEM_WEIGHT = 0.10
 
 # OSQP objective penalties
-LAMBDA_V = 35.0   # Velocity smoothness penalty (anti-hunting)
-LAMBDA_A = 70.0   # Acceleration smoothness penalty (silky cinematic pan)
+LAMBDA_V = 50.0   # Velocity smoothness penalty (anti-hunting tripod lock)
+LAMBDA_A = 90.0   # Acceleration smoothness penalty (silky cinematic pan)
 
 # Hard constraints for 1920px source, 607.5px crop (9:16 from 16:9)
 CROP_WIDTH_PX = 607.5
@@ -444,22 +444,6 @@ def fuse_point_of_interest(spatial_events: List[Any],
                 all_human_candidates = [(cx, w) for cx, w, _ in active_candidates] + human_other
                 total_w = sum(w for _, w in all_human_candidates)
                 weighted_cx = sum(cx * w for cx, w in all_human_candidates) / total_w
-
-                # Standup comedian gestural prop compensation:
-                # If pointing arm is extended and there is a target prop or screen, bias towards it
-                if screen_items:
-                    for d in dets:
-                        if abs(d["cx_px"] - weighted_cx) < 100 and d.get("keypoints"):
-                            kpts = d["keypoints"]
-                            if len(kpts) >= 11:
-                                for w_idx, s_idx in [(9, 5), (10, 6)]:
-                                    if w_idx < len(kpts) and s_idx < len(kpts):
-                                        if len(kpts[w_idx]) >= 2 and len(kpts[s_idx]) >= 2:
-                                            arm_reach = kpts[w_idx][0] - kpts[s_idx][0]
-                                            if abs(arm_reach) > 0.15:
-                                                weighted_cx += (arm_reach * 0.25 * src_width)
-                                                break
-
                 last_active_cx_px = weighted_cx
                 poi_x[f] = weighted_cx
             elif screen_items and (not human_other or active_speaker_dropped_out):
@@ -529,7 +513,8 @@ def _solve_shot_osqp(poi_shot: np.ndarray,
                      max_x: float = MAX_X,
                      max_vel: float = MAX_VELOCITY_PX,
                      lambda_v: float = LAMBDA_V,
-                     lambda_a: float = LAMBDA_A) -> np.ndarray:
+                     lambda_a: float = LAMBDA_A,
+                     post_clamp: bool = False) -> np.ndarray:
     """Solves the OSQP quadratic program for a single shot.
 
     Objective:
@@ -559,9 +544,9 @@ def _solve_shot_osqp(poi_shot: np.ndarray,
     if T <= 1:
         return np.clip(poi_shot, min_x, max_x)
 
-    # ── Kinematic deadzone filtering with anchored reference to eliminate micro-jitter (< 35px) ──
+    # ── Kinematic deadzone filtering with anchored reference to eliminate micro-jitter (< 65px tripod lock) ──
     filtered_poi = np.asarray(poi_shot, dtype=np.float64).copy()
-    deadzone_px = 35.0
+    deadzone_px = 65.0
     anchor = filtered_poi[0]
     for t in range(1, T):
         if abs(filtered_poi[t] - anchor) < deadzone_px:
@@ -656,7 +641,14 @@ def _solve_shot_osqp(poi_shot: np.ndarray,
                        f"Falling back to RTS Kalman smoother.")
         return _kalman_fallback(poi_shot, min_x, max_x, max_vel)
 
-    return np.clip(result.x, min_x, max_x)
+    out_x = np.clip(result.x, min_x, max_x)
+    if post_clamp:
+        for i in range(1, len(out_x)):
+            dx = out_x[i] - out_x[i - 1]
+            if abs(dx) > max_vel:
+                out_x[i] = out_x[i - 1] + np.sign(dx) * max_vel
+        out_x = np.clip(out_x, min_x, max_x)
+    return out_x
 
 
 def _kalman_fallback(poi_shot: np.ndarray, min_x: float, max_x: float,
@@ -821,7 +813,8 @@ def solve_trajectory(spatial_events: List[Any],
                 max_x=max_x,
                 max_vel=MAX_VELOCITY_PX,
                 lambda_v=LAMBDA_V,
-                lambda_a=LAMBDA_A
+                lambda_a=LAMBDA_A,
+                post_clamp=True
             )
             result_x[shot_start:shot_end] = shot_x
 
@@ -835,7 +828,8 @@ def solve_trajectory(spatial_events: List[Any],
                     max_x=max_y,
                     max_vel=10.0,
                     lambda_v=LAMBDA_V,
-                    lambda_a=LAMBDA_A
+                    lambda_a=LAMBDA_A,
+                    post_clamp=True
                 )
                 result_y[shot_start:shot_end] = shot_y
 

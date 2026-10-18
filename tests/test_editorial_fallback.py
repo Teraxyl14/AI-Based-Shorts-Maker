@@ -76,7 +76,7 @@ class TestEditorialFallback(unittest.TestCase):
         for s in shorts:
             self.assertGreaterEqual(s["start_time_seconds"], 60.0)
             self.assertGreaterEqual(s["duration_seconds"], 30.0)
-            self.assertLessEqual(s["duration_seconds"], 50.0)
+            self.assertLessEqual(s["duration_seconds"], 60.0)
 
 
 if __name__ == "__main__":
