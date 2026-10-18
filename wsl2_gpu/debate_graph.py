@@ -274,9 +274,11 @@ class DebateGraph:
             "- Select self-contained scenes from the BODY of the video where a specific interaction, challenge, joke, or explanation plays out in real-time.\n"
             "- A valid clip must follow ONE continuous conversation or action from start to finish.\n"
             "- Narrative: Each clip must be a SINGLE-TOPIC story arc — one self-contained premise with Premise -> Friction -> Conclusion.\n"
-            "- Clip duration: Sum of segments in each clip MUST be between 30.0 and 45.0 seconds (target ~38s; strictly NEVER exceed 45.0s).\n"
-            "- Candidate Generation Mandate: Propose 4 distinct candidate clips (each 30s - 45s), all sourced after the 1:00 (60.0s) timestamp mark.\n"
-            "- Hook: First segment must start on a punchy, high-arousal statement or action.\n"
+            "- Clip duration: Sum of segments in each clip MUST be between 30.0 and 50.0 seconds (target ~40s; strictly within 30.0s–50.0s).\n"
+            "- Candidate Generation Mandate: Propose 4 distinct candidate clips (each 30s - 50s), all sourced after the 1:00 (60.0s) timestamp mark.\n"
+            "- Hook: First segment must start on a punchy statement or action with first spoken word occurring <= 1.5s.\n"
+            "- Payoff: Conclude cleanly on a complete sentence or thought boundary (no mid-sentence cuts).\n"
+            "- Episodic Continuity: Strictly NO chronological summary montages; each clip must be a single continuous scene.\n"
             "- 2-Mode Universal Layout (layout_mode per segment):\n"
             "  * SMART_PORTRAIT_PAN: Assign to ALL segments with a human presenter, dialogue, reactions, desk demonstrations. DEFAULT.\n"
             "  * CANVAS_GRAPHIC_FIT: Assign ONLY when the primary visual content is a full-screen graphic, chart, website, document, or widescreen software UI with NO human presenter in-frame.\n"
@@ -291,11 +293,11 @@ class DebateGraph:
             "{\"clips\": [{\"segments\": [{\"segment_start\": float, \"segment_end\": float, "
             "\"layout_mode\": \"SMART_PORTRAIT_PAN\"|\"CANVAS_GRAPHIC_FIT\", "
             "\"focal_target\": \"SPEAKER_PRIMARY\"|\"SPEAKER_REACTION\"|\"FOCAL_DISPLAY\"|\"HELD_OBJECT\"|\"ACTION_SCENE\", "
-            "\"emphasis_zoom\": bool}], "
+            "}], "
             "\"hook_score\": float, \"retention_score\": float, \"cta_present\": bool, "
             "\"reasoning\": str (max 5 words), \"caption_text\": str (max 5 words)}]}. "
-            "You MUST return 4 distinct candidate clips, each with total duration between 30.0s and 45.0s (strictly under 45s), "
-            "and all segment timestamps MUST be sourced after the 1:00 (60.0s) mark. Keep reasoning/caption_text extremely short (under 5 words)."
+            "You MUST return 4 distinct candidate clips, each with total duration strictly between 30.0s and 50.0s, "
+            "and all segment timestamps MUST be sourced strictly after the 1:00 (60.0s) mark. Keep reasoning/caption_text extremely short (under 5 words)."
         )
 
         try:
@@ -341,8 +343,6 @@ class DebateGraph:
                         target_track_id=int(s.get("target_track_id", 0)),
                         layout_mode=norm_layout,
                         focal_target=raw_focal,
-                        camera_target=str(s.get("camera_target", "SPEAKER_FACE")),
-                        emphasis_zoom=bool(s.get("emphasis_zoom", False))
                     ))
                 # Enforce chronological segment sorting
                 segs = sorted(segs, key=lambda s: s.segment_start)
@@ -365,9 +365,9 @@ class DebateGraph:
                                 s.layout_mode = "CANVAS_GRAPHIC_FIT"
                                 break
 
-                # Enforce Teaser Blacklist: drop any candidate clip starting before 58.0s
+                # Enforce Teaser Blacklist: drop any candidate clip with timestamps before 60.0s
                 earliest_start = min(s.segment_start for s in segs) if segs else 0.0
-                if earliest_start < 58.0:
+                if earliest_start < 60.0 or any(s.segment_start < 60.0 for s in segs):
                     logger.warning(f"[GRAPH] Filtered candidate clip starting at {earliest_start:.1f}s (violates >= 60.0s teaser blacklist)")
                     continue
 
@@ -486,11 +486,17 @@ class DebateGraph:
                     seg_start = getattr(seg, "segment_start", 0.0) if hasattr(seg, "segment_start") else seg.get("segment_start", 0.0)
                     seg_end = getattr(seg, "segment_end", 0.0) if hasattr(seg, "segment_end") else seg.get("segment_end", 0.0)
                     total_dur += (seg_end - seg_start)
-                if not (28.0 <= total_dur <= 48.0):
+                    if seg_start < 60.0:
+                        rejection_reason = (
+                            f"REJECTED: Clip {clip_idx + 1} starts at {seg_start:.1f}s in the intro teaser zone. "
+                            f"All clips MUST start strictly at or after 60.0s from the narrative body of the video."
+                        )
+                        break
+                if not rejection_reason and not (30.0 <= total_dur <= 50.0):
                     rejection_reason = (
                         f"REJECTED: Clip {clip_idx + 1} has a total accumulated duration of {total_dur:.1f}s, "
-                        f"which violates the strict 30.0s - 48.0s Shorts/Reels duration gate. "
-                        f"Each clip MUST be between 30.0 and 48.0 seconds."
+                        f"which violates the strict 30.0s - 50.0s Shorts/Reels duration gate. "
+                        f"Each clip MUST be between 30.0 and 50.0 seconds."
                     )
                     break
 
@@ -577,8 +583,8 @@ class DebateGraph:
                 for seg_idx, seg in enumerate(segs):
                     seg_start = getattr(seg, "segment_start", 0.0) if hasattr(seg, "segment_start") else seg.get("segment_start", 0.0)
                     seg_end = getattr(seg, "segment_end", 0.0) if hasattr(seg, "segment_end") else seg.get("segment_end", 0.0)
-                    camera_target = getattr(seg, "camera_target", "SPEAKER_FACE") if hasattr(seg, "camera_target") else seg.get("camera_target", "SPEAKER_FACE")
-                    layout_mode = getattr(seg, "layout_mode", "speaker_full") if hasattr(seg, "layout_mode") else seg.get("layout_mode", "speaker_full")
+                    focal_target = getattr(seg, "focal_target", "SPEAKER_PRIMARY") if hasattr(seg, "focal_target") else seg.get("focal_target", "SPEAKER_PRIMARY")
+                    layout_mode = getattr(seg, "layout_mode", "SMART_PORTRAIT_PAN") if hasattr(seg, "layout_mode") else seg.get("layout_mode", "SMART_PORTRAIT_PAN")
                     seg_dur = seg_end - seg_start
                     
                     # Normalize layout mode in director check
@@ -588,14 +594,14 @@ class DebateGraph:
                     else:
                         norm_layout = "SMART_PORTRAIT_PAN"
                         
-                    if seg_start < 58.0:
+                    if seg_start < 60.0:
                         rejection_reason = (
                             f"REJECTED: Clip {clip_idx + 1} starts at {seg_start:.1f}s in the intro teaser zone. "
-                            f"All clips MUST start after 60.0s from the narrative body of the video."
+                            f"All clips MUST start strictly at or after 60.0s from the narrative body of the video."
                         )
                         break
 
-                    if camera_target == "SPEAKER_FACE":
+                    if focal_target in ("SPEAKER_PRIMARY", "SPEAKER_REACTION"):
                         continuous_face_duration += seg_dur
                         
                         # Check for hardware keywords in this segment
@@ -617,6 +623,36 @@ class DebateGraph:
                             f"to introduce visual variety and eliminate 'Face-Lock' blindness."
                         )
                         break
+
+                if not rejection_reason and segs:
+                    # Anti-montage check: Reject clips spanning across disjoint parts of the video
+                    clip_span = (max(getattr(s, "segment_end", 0.0) if hasattr(s, "segment_end") else s.get("segment_end", 0.0) for s in segs) -
+                                 min(getattr(s, "segment_start", 0.0) if hasattr(s, "segment_start") else s.get("segment_start", 0.0) for s in segs))
+                    if clip_span > 75.0:
+                        rejection_reason = (
+                            f"REJECTED: Clip {clip_idx + 1} spans {clip_span:.1f}s of source footage, "
+                            f"forming a chronological summary montage. Clips must represent a continuous single-act scene."
+                        )
+                        break
+
+                    # Hook validation: First spoken word delay <= 1.5s
+                    transcript_words = get_state_field(state, "transcript_words", [])
+                    if transcript_words:
+                        first_seg_start = getattr(segs[0], "segment_start", 0.0) if hasattr(segs[0], "segment_start") else segs[0].get("segment_start", 0.0)
+                        words_in_hook = [
+                            (w.get("start", 0.0) if isinstance(w, dict) else getattr(w, "start", 0.0))
+                            for w in transcript_words
+                            if (w.get("end", 0.0) if isinstance(w, dict) else getattr(w, "end", 0.0)) > first_seg_start
+                            and (w.get("start", 0.0) if isinstance(w, dict) else getattr(w, "start", 0.0)) <= first_seg_start + 5.0
+                        ]
+                        if words_in_hook:
+                            first_word_delay = words_in_hook[0] - first_seg_start
+                            if first_word_delay > 1.5:
+                                rejection_reason = (
+                                    f"REJECTED: Clip {clip_idx + 1} Hook failure: first spoken word occurs at "
+                                    f"{first_word_delay:.2f}s (> 1.5s threshold). Hook must begin speaking within 1.5s."
+                                )
+                                break
                         
                 if rejection_reason:
                     break
@@ -638,7 +674,7 @@ class DebateGraph:
             "to ensure they are narrative-focused, high energy, start exactly on a punchy word, "
             "and are structurally perfect.\n"
             "Production Guidelines:\n"
-            "- Clip duration must be strictly between 30 and 58 seconds (HARD LIMIT: never exceed 58s).\n"
+            "- Clip duration must be strictly between 30.0 and 50.0 seconds (HARD LIMIT: strictly 30.0s <= dur <= 50.0s).\n"
             "- Must contain at least 3 clips.\n"
             "- Every clip must have a clear self-contained story arc with a definitive payoff (Premise -> Friction -> Conclusion Loop).\n"
             "- The first 3 seconds MUST contain a high-arousal retention hook (contrarian, surprise, or energy shift).\n"
@@ -720,7 +756,7 @@ class DebateGraph:
         return "editor"
 
     async def publish_node(self, state: PipelineState) -> dict:
-        """Finalizes the debate and enforces strict programmatic duration clamp (<=47.5s) with word-boundary snapping."""
+        """Finalizes the debate and enforces strict programmatic duration clamp (30.0s <= dur <= 50.0s) with word-boundary snapping."""
         logger.info("[GRAPH] Entering Publish Node. Debate complete.")
         cutting_manifest = get_state_field(state, "cutting_manifest")
         if isinstance(cutting_manifest, dict):
@@ -735,11 +771,18 @@ class DebateGraph:
                 word_ends.append(float(w_end))
         word_ends.sort()
 
-        MAX_CLIP_DUR = 47.5
+        MAX_CLIP_DUR = 50.0
+        MIN_CLIP_DUR = 30.0
 
         if cutting_manifest and cutting_manifest.clips:
+            published_clips = []
             for clip_idx, clip in enumerate(cutting_manifest.clips):
                 segs = clip.segments if hasattr(clip, "segments") else clip.get("segments", [])
+
+                # Teaser blacklist assertion in publish node
+                if any((s.segment_start if hasattr(s, "segment_start") else s.get("segment_start", 0.0)) < 60.0 for s in segs):
+                    logger.warning(f"[GRAPH] Skipping clip {clip_idx + 1} with segment before 60.0s teaser cutoff")
+                    continue
                 total_dur = 0.0
                 clamped_segs = []
                 for s in segs:
@@ -783,6 +826,9 @@ class DebateGraph:
                 else:
                     clip["segments"] = clamped_segs
                 logger.info(f"[GRAPH] Clip {clip_idx + 1} finalized with duration {total_dur:.1f}s (strictly <= {MAX_CLIP_DUR}s)")
+                published_clips.append(clip)
+
+            cutting_manifest.clips = published_clips
 
         return {"cutting_manifest": cutting_manifest, "current_stage": "debate_complete", "pipeline_complete": True}
 

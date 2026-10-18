@@ -1,13 +1,15 @@
 import os
 import sys
 import json
+import math
 import asyncio
 import logging
 import subprocess
 import time
 import nats
 from nats.js.api import ConsumerConfig
-from typing import List
+from typing import List, Tuple, Optional
+
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from shared.schemas import SceneChange, SpatialEvent
@@ -17,15 +19,140 @@ logger = logging.getLogger("AetherVisionSpoke")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 # Configurable YOLO model tag via env var for hot-swap modularity
-SPATIAL_TRACKER_MODEL = os.getenv("SPATIAL_TRACKER_MODEL", "yolo26s-pose")
+SPATIAL_TRACKER_MODEL = os.getenv("SPATIAL_TRACKER_MODEL", "yolo11s-pose")
 # Frame sampling rate for pose detection (seconds between samples)
 POSE_SAMPLE_INTERVAL = 0.5
 # Scene change detection threshold (histogram diff)
 SCENE_CHANGE_THRESHOLD = 0.35
 
+# ─── Hand-Object Proximity & Demonstration ROI Helpers ──────────────────────
+
+def compute_wrist_object_proximity(
+    wrist_keypoints: List[Tuple[float, float, float]],
+    object_bbox: Tuple[float, float, float, float]
+) -> Tuple[float, int]:
+    """Computes minimum Euclidean distance between left/right wrist keypoints and object bbox center.
+
+    Keypoints: COCO 17-point skeleton where index 9 is left wrist and index 10 is right wrist.
+    BBox: (cx, cy, w, h) normalized coordinates.
+    Returns: (min_distance, nearest_wrist_index) or (float('inf'), -1) if no valid wrists.
+    """
+    if not wrist_keypoints or len(wrist_keypoints) < 11:
+        return (float("inf"), -1)
+
+    cx, cy, _, _ = object_bbox
+    min_dist = float("inf")
+    nearest_wrist = -1
+
+    for idx in (9, 10):
+        kp = wrist_keypoints[idx]
+        if len(kp) >= 2:
+            kx, ky = kp[0], kp[1]
+            conf = kp[2] if len(kp) >= 3 else 1.0
+            if conf > 0.2 and (kx > 0.01 or ky > 0.01):
+                d = math.sqrt((cx - kx) ** 2 + (cy - ky) ** 2)
+                if d < min_dist:
+                    min_dist = d
+                    nearest_wrist = idx
+
+    return (min_dist, nearest_wrist)
+
+
+def associate_hand_object_proximity(
+    spatial_events: List[SpatialEvent],
+    proximity_threshold: Optional[float] = None
+) -> List[SpatialEvent]:
+    """Associates detected objects with nearby wrists.
+    Assigns action_label='held_product' when object is within hand proximity.
+    """
+    frames_dict = {}
+    for ev in spatial_events:
+        key = ev.frame_idx if ev.frame_idx != 0 else round(ev.timestamp, 2)
+        frames_dict.setdefault(key, []).append(ev)
+
+    for key, evs in frames_dict.items():
+        person_events = [e for e in evs if e.label == "person" and e.keypoints]
+        obj_events = [e for e in evs if e.label != "person" and e.label != "saliency"]
+
+        for obj in obj_events:
+            for p in person_events:
+                dist, _ = compute_wrist_object_proximity(p.keypoints, obj.bbox)
+                _, _, w, h = obj.bbox
+                thresh = proximity_threshold if proximity_threshold is not None else max(max(w, h) * 1.2, 0.18)
+                if dist < thresh:
+                    obj.action_label = "held_product"
+                    break
+
+    return spatial_events
+
+
+def generate_synthetic_demonstration_roi(
+    person_event: SpatialEvent,
+    existing_objects: List[SpatialEvent]
+) -> Optional[SpatialEvent]:
+    """Generates synthetic demonstration ROI fallback when gestures indicate demonstration
+    but COCO object detection misses fine-grained product parts.
+    """
+    if person_event.label != "person" or not person_event.keypoints or len(person_event.keypoints) < 17:
+        return None
+
+    # Check if an existing object is already held or near hands
+    for obj in existing_objects:
+        if obj.action_label == "held_product":
+            return None
+        dist, _ = compute_wrist_object_proximity(person_event.keypoints, obj.bbox)
+        _, _, w, h = obj.bbox
+        if dist < max(max(w, h) * 1.2, 0.18):
+            return None
+
+    kps = person_event.keypoints
+    l_wrist = kps[9]
+    r_wrist = kps[10]
+    gesture = person_event.action_label or ""
+
+    is_demo = gesture in ("pointing", "waving", "demonstrating", "holding", "leaning_forward")
+
+    l_shoulder_y = kps[5][1]
+    r_shoulder_y = kps[6][1]
+    shoulder_y = (l_shoulder_y + r_shoulder_y) / 2.0
+    l_hip_y = kps[11][1]
+    r_hip_y = kps[12][1]
+    hip_y = (l_hip_y + r_hip_y) / 2.0
+
+    l_active = (l_wrist[1] < hip_y + 0.05 and l_wrist[1] > shoulder_y - 0.20 and (len(l_wrist) < 3 or l_wrist[2] > 0.3))
+    r_active = (r_wrist[1] < hip_y + 0.05 and r_wrist[1] > shoulder_y - 0.20 and (len(r_wrist) < 3 or r_wrist[2] > 0.3))
+
+    if not is_demo and not (l_active or r_active):
+        return None
+
+    # Select the most active wrist
+    if l_active and r_active:
+        chosen_wrist = l_wrist if l_wrist[1] < r_wrist[1] else r_wrist
+    elif l_active:
+        chosen_wrist = l_wrist
+    elif r_active:
+        chosen_wrist = r_wrist
+    else:
+        chosen_wrist = l_wrist if (len(l_wrist) >= 3 and l_wrist[2] > 0) else r_wrist
+
+    cx = max(0.15, min(0.85, chosen_wrist[0]))
+    cy = max(0.20, min(0.80, chosen_wrist[1]))
+    synth_bbox = (round(cx, 3), round(cy, 3), 0.25, 0.35)
+
+    return SpatialEvent(
+        timestamp=person_event.timestamp,
+        frame_idx=person_event.frame_idx,
+        track_id=200 + person_event.track_id,
+        label="demonstration_action",
+        bbox=synth_bbox,
+        confidence=0.75,
+        keypoints=[],
+        action_label="held_product"
+    )
+
 
 class VisionSpoke:
-    """GPU-resident visual pre-pass: Kornia scene-change detection + YOLO26s-Pose skeletal tracking.
+    """GPU-resident visual pre-pass: Kornia scene-change detection + YOLO11s-Pose skeletal tracking.
 
     All frame processing stays on GPU tensors — no NumPy round-trips.
     Publishes timestamped SceneChange and PoseKeypoint event streams to NATS.
@@ -47,44 +174,52 @@ class VisionSpoke:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Vision Spoke using device: {self.device}")
 
-        # Load YOLOE-26 / YOLOv8s open-vocabulary model with auto-caching
-        yoloe_path = "./data/models/yoloe26s.pt"
-        logger.info(f"Loading YOLOE open-vocabulary detector model...")
-        t0 = time.perf_counter()
+        # Load Primary Human Tracker (YOLO11s-Pose)
+        logger.info("Loading YOLO11s-Pose primary human tracker model...")
+        pose_path = "./data/models/yolo11s-pose.pt"
         try:
             from ultralytics import YOLO
             os.makedirs("./data/models", exist_ok=True)
+            if os.path.exists(pose_path):
+                self.yolo_pose_model = YOLO(pose_path)
+            elif os.path.exists("yolo11s-pose.pt"):
+                self.yolo_pose_model = YOLO("yolo11s-pose.pt")
+            else:
+                self.yolo_pose_model = YOLO("yolo11s-pose")
+            logger.info("YOLO11s-Pose model loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to load YOLO11s-Pose model: {e}")
+            self.yolo_pose_model = "mock"
+
+        # Load Object Detector for Non-Human Items (YOLOE-26 / YOLOv8s)
+        yoloe_path = "./data/models/yoloe26s.pt"
+        logger.info("Loading YOLO object detector model...")
+        t0 = time.perf_counter()
+        try:
+            from ultralytics import YOLO
             if os.path.exists(yoloe_path):
                 self.yoloe_model = YOLO(yoloe_path)
             elif os.path.exists("./data/models/yolov8s.pt"):
                 self.yoloe_model = YOLO("./data/models/yolov8s.pt")
+            elif os.path.exists("yolov8s.pt"):
+                self.yoloe_model = YOLO("yolov8s.pt")
             else:
                 try:
                     self.yoloe_model = YOLO("yolov8s.pt")
                 except Exception:
                     self.yoloe_model = None
-            
+
             elapsed = time.perf_counter() - t0
             if self.yoloe_model is not None:
                 logger.info(f"YOLO detector model loaded in {elapsed:.2f}s")
-                self.yolo_model = self.yoloe_model
             else:
-                logger.info("YOLO detector not available, using pose model as primary.")
-                self.yolo_model = "mock"
+                logger.info("YOLO object detector not available.")
         except Exception as e:
-            logger.warning(f"Optional YOLOE detector not loaded: {e}. Falling back to pose model.")
+            logger.warning(f"Optional YOLO detector not loaded: {e}.")
             self.yoloe_model = None
-            self.yolo_model = "mock"
 
-        # Load Anatomical Fallback (YOLO11s-Pose)
-        logger.info(f"Loading YOLO11s-Pose fallback model...")
-        try:
-            from ultralytics import YOLO
-            self.yolo_pose_model = YOLO("yolo11s-pose")
-            logger.info("YOLO11s-Pose model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO11s-Pose model: {e}")
-            self.yolo_pose_model = "mock"
+        self.yolo_model = self.yolo_pose_model if getattr(self, 'yolo_pose_model', 'mock') != 'mock' else self.yoloe_model
+
 
     def _get_video_info(self, source_path: str) -> tuple:
         """Returns (duration, fps, width, height) via ffprobe."""
@@ -194,10 +329,14 @@ class VisionSpoke:
         return scene_changes
 
     def detect_spatial_events(self, source_path: str, duration: float, fps: float) -> List[SpatialEvent]:
-        """Runs 3-tier tracking hierarchy (YOLOE-26 -> YOLO11s-Pose -> Saliency) on sampled frames."""
+        """Runs 3-tier tracking hierarchy (YOLO11s-Pose primary + ByteTrack, YOLO object detector, Saliency)."""
         spatial_events = []
         logger.info(f"Running 3-tier spatial detection (sampling every {POSE_SAMPLE_INTERVAL}s)...")
         t0 = time.perf_counter()
+
+        # Ensure models are loaded
+        if getattr(self, 'yolo_pose_model', None) is None and getattr(self, 'yoloe_model', None) is None:
+            self._load_models()
 
         # Check if both models are unavailable
         both_unavailable = (getattr(self, 'yoloe_model', None) is None) and (getattr(self, 'yolo_pose_model', "mock") == "mock")
@@ -255,54 +394,114 @@ class VisionSpoke:
 
                 detected = False
 
-                # Tier 1: YOLOE-26 (Open Vocabulary)
-                if getattr(self, 'yoloe_model', None) is not None:
-                    results = self.yoloe_model(frame_np, verbose=False, conf=0.3)
-                    if results and len(results) > 0 and results[0].boxes is not None and len(results[0].boxes) > 0:
-                        boxes = results[0].boxes.xywhn.cpu().numpy()
-                        classes = results[0].boxes.cls.cpu().numpy()
-                        confs = results[0].boxes.conf.cpu().numpy()
-                        names = results[0].names
-                        for i in range(len(boxes)):
-                            label = names[int(classes[i])] if names else "object"
-                            bbox = tuple(float(v) for v in boxes[i])
-                            spatial_events.append(SpatialEvent(
-                                timestamp=timestamp,
-                                frame_idx=int(timestamp * fps),
-                                track_id=i,
-                                label=label,
-                                bbox=bbox,
-                                confidence=float(confs[i]),
-                                keypoints=[]
-                            ))
-                        detected = True
+                frame_events = []
 
-                # Tier 2: Anatomical Fallback (YOLO11s-Pose)
-                if not detected and getattr(self, 'yolo_pose_model', "mock") != "mock":
-                    results = self.yolo_pose_model(frame_np, verbose=False, conf=0.3)
-                    if results and len(results) > 0 and results[0].boxes is not None and len(results[0].boxes) > 0:
-                        boxes = results[0].boxes.xywhn.cpu().numpy()
-                        kps = results[0].keypoints.data if results[0].keypoints is not None else None
-                        for i in range(min(len(boxes), 3)):
-                            bbox = tuple(float(v) for v in boxes[i])
-                            keypoints = []
-                            if kps is not None:
-                                keypoints_raw = kps[i].cpu().numpy()
-                                keypoints = [
-                                    (float(kp[0] / frame_w), float(kp[1] / frame_h), float(kp[2]))
-                                    for kp in keypoints_raw
-                                ]
-                            gesture = self._classify_gesture(keypoints)
-                            spatial_events.append(SpatialEvent(
-                                timestamp=timestamp,
-                                frame_idx=int(timestamp * fps),
-                                track_id=i,
-                                label="person",
-                                bbox=bbox,
-                                confidence=float(results[0].boxes.conf[i]),
-                                keypoints=keypoints,
-                                action_label=gesture
-                            ))
+                # Tier 1: Primary Human Detection & Pose Tracking (YOLO11s-Pose + ByteTrack)
+                if getattr(self, 'yolo_pose_model', "mock") != "mock":
+                    try:
+                        try:
+                            pose_results = self.yolo_pose_model.track(
+                                frame_np, persist=True, tracker="bytetrack.yaml",
+                                classes=[0], verbose=False, conf=0.3
+                            )
+                        except Exception:
+                            pose_results = self.yolo_pose_model(
+                                frame_np, classes=[0], verbose=False, conf=0.3
+                            )
+
+                        if pose_results and len(pose_results) > 0 and pose_results[0].boxes is not None and len(pose_results[0].boxes) > 0:
+                            boxes = pose_results[0].boxes.xywhn.cpu().numpy()
+                            confs = pose_results[0].boxes.conf.cpu().numpy()
+                            track_ids = (
+                                pose_results[0].boxes.id.int().cpu().tolist()
+                                if pose_results[0].boxes.id is not None
+                                else list(range(len(boxes)))
+                            )
+                            kps = pose_results[0].keypoints.data if pose_results[0].keypoints is not None else None
+
+                            for i in range(len(boxes)):
+                                bbox = tuple(float(v) for v in boxes[i])
+                                keypoints = []
+                                if kps is not None and i < len(kps):
+                                    keypoints_raw = kps[i].cpu().numpy()
+                                    keypoints = [
+                                        (float(kp[0] / frame_w), float(kp[1] / frame_h), float(kp[2]))
+                                        for kp in keypoints_raw
+                                    ]
+                                gesture = self._classify_gesture(keypoints)
+                                tid = track_ids[i] if i < len(track_ids) else i
+                                ev = SpatialEvent(
+                                    timestamp=timestamp,
+                                    frame_idx=int(timestamp * fps),
+                                    track_id=int(tid),
+                                    label="person",
+                                    bbox=bbox,
+                                    confidence=float(confs[i]),
+                                    keypoints=keypoints,
+                                    action_label=gesture
+                                )
+                                frame_events.append(ev)
+                                spatial_events.append(ev)
+                            detected = True
+                    except Exception as e:
+                        logger.warning(f"Pose tracking error at frame {frame_idx}: {e}")
+
+                # Tier 2: Non-Human Object Detection (YOLOE / YOLOv8s with ByteTrack persistence)
+                if getattr(self, 'yoloe_model', None) is not None:
+                    try:
+                        try:
+                            obj_results = self.yoloe_model.track(
+                                frame_np, persist=True, tracker="bytetrack.yaml",
+                                verbose=False, conf=0.25
+                            )
+                        except Exception:
+                            obj_results = self.yoloe_model(frame_np, verbose=False, conf=0.25)
+
+                        if obj_results and len(obj_results) > 0 and obj_results[0].boxes is not None and len(obj_results[0].boxes) > 0:
+                            obj_boxes = obj_results[0].boxes.xywhn.cpu().numpy()
+                            obj_classes = obj_results[0].boxes.cls.cpu().numpy()
+                            obj_confs = obj_results[0].boxes.conf.cpu().numpy()
+                            obj_names = obj_results[0].names
+                            obj_track_ids = (
+                                obj_results[0].boxes.id.int().cpu().tolist()
+                                if obj_results[0].boxes.id is not None
+                                else None
+                            )
+
+                            for j in range(len(obj_boxes)):
+                                cls_id = int(obj_classes[j])
+                                label = obj_names[cls_id] if obj_names else "object"
+                                # Exclude person if pose model is active, avoiding duplicate person records
+                                if getattr(self, 'yolo_pose_model', "mock") != "mock" and label.lower() in ("person", "human"):
+                                    continue
+                                bbox = tuple(float(v) for v in obj_boxes[j])
+                                tid = (100 + obj_track_ids[j]) if obj_track_ids and j < len(obj_track_ids) else (100 + j)
+                                ev = SpatialEvent(
+                                    timestamp=timestamp,
+                                    frame_idx=int(timestamp * fps),
+                                    track_id=int(tid),
+                                    label=label,
+                                    bbox=bbox,
+                                    confidence=float(obj_confs[j]),
+                                    keypoints=[]
+                                )
+                                frame_events.append(ev)
+                                spatial_events.append(ev)
+                                detected = True
+                    except Exception as e:
+                        logger.warning(f"Object detection error at frame {frame_idx}: {e}")
+
+                # Associate hand-to-object proximity for detected objects in this frame
+                if frame_events:
+                    associate_hand_object_proximity(frame_events)
+
+                # Synthetic demonstration ROI fallback if gestures indicate active demo but no COCO object detected
+                for p_ev in [e for e in frame_events if e.label == "person"]:
+                    existing_objs = [e for e in frame_events if e.label != "person"]
+                    synth_roi = generate_synthetic_demonstration_roi(p_ev, existing_objs)
+                    if synth_roi is not None:
+                        frame_events.append(synth_roi)
+                        spatial_events.append(synth_roi)
                         detected = True
 
                 # Tier 3: Spectral Residual Saliency (Kornia fallback)
@@ -318,6 +517,7 @@ class VisionSpoke:
                         bbox=(0.5, 0.5, 1.0, 1.0),
                         confidence=0.1
                     ))
+
 
                 frame_idx += 1
 
@@ -353,17 +553,24 @@ class VisionSpoke:
                     return "pointing"
                 return "waving"
 
-            # Leaning forward: nose significantly ahead of hip center
+            # Leaning forward: nose closer to shoulders due to forward tilt foreshortening
             l_hip_y = keypoints[11][1]
             r_hip_y = keypoints[12][1]
             hip_center_y = (l_hip_y + r_hip_y) / 2
-            torso_len = hip_center_y - (l_shoulder_y + r_shoulder_y) / 2
-            if torso_len > 0 and nose_y < (l_shoulder_y + r_shoulder_y) / 2 - torso_len * 0.3:
+            shoulder_center_y = (l_shoulder_y + r_shoulder_y) / 2
+            torso_len = hip_center_y - shoulder_center_y
+            head_offset = shoulder_center_y - nose_y
+            if torso_len > 0 and 0 < head_offset <= torso_len * 0.40:
                 return "leaning_forward"
 
             return "standing"
         except (IndexError, TypeError):
             return "unknown"
+
+    # Module-level helpers exposed on class
+    compute_wrist_object_proximity = staticmethod(lambda kps, bbox: compute_wrist_object_proximity(kps, bbox))
+    associate_hand_object_proximity = staticmethod(lambda events, thresh=None: associate_hand_object_proximity(events, thresh))
+    generate_synthetic_demonstration_roi = staticmethod(lambda p, objs: generate_synthetic_demonstration_roi(p, objs))
 
     async def run(self):
         """Connects to NATS and processes video.ingest messages."""

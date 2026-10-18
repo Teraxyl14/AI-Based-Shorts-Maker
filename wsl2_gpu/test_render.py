@@ -229,11 +229,10 @@ def test_duration_gate_limits():
         segment_start=0.0,
         segment_end=40.0,
         focal_target="HELD_OBJECT",
-        emphasis_zoom=True
     )
     assert seg.focal_target == "HELD_OBJECT"
-    assert seg.emphasis_zoom is True
-    print(f"VideoSegment created with focal_target='{seg.focal_target}', emphasis_zoom={seg.emphasis_zoom} [OK]")
+    assert seg.layout_mode == "SMART_PORTRAIT_PAN"
+    print(f"VideoSegment created with focal_target='{seg.focal_target}', layout_mode='{seg.layout_mode}' [OK]")
     print(f"Duration limits: [28.0s, 48.0s] hard gates verified [OK]")
 
     print("[PASSED] Duration Gate & VideoSegment schema tests PASSED.")

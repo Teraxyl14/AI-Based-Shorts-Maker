@@ -14,3 +14,4 @@ freetype-py
 scipy>=1.12.0
 ultralytics>=8.3.0
 faster-whisper>=1.0.0
+osqp>=0.6.7

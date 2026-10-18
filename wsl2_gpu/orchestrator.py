@@ -1,3 +1,15 @@
+"""
+Project Aether V3 — Subprocess-Isolated Pipeline Orchestrator
+
+Replaces the V2 in-process threaded pipeline with subprocess-spawned VRAM
+phase isolation. Each pipeline phase runs in a dedicated child process with
+its own CUDA context, guaranteeing 100% VRAM reclamation between phases.
+
+Phase 1 (ASR):               Spawned subprocess → Whisper INT8 + CTC Alignment
+Phase 2 (Vision & Editorial): Spawned subprocess → Kornia SceneDet + YOLO Pose + VLM Editorial
+Phase 3 (Render):            Spawned subprocess → OSQP Trajectory + GPU Atlas + NVDEC/NVENC
+"""
+
 import os
 import sys
 import json
@@ -5,7 +17,8 @@ import asyncio
 import hashlib
 import time
 import logging
-import subprocess
+import gc
+import multiprocessing as mp
 from typing import Optional, List, Dict, Any
 
 import nats
@@ -21,27 +34,33 @@ from shared.nats_subjects import (
     VIDEO_INGEST, METADATA_AUDIO, METADATA_VISION, METADATA_FUSED,
     VIDEO_RENDER, PIPELINE_STATUS
 )
-from wsl2_gpu.debate_graph import DebateGraph
-from wsl2_gpu.fusion_consumer import FusionConsumer
-from wsl2_gpu.ingest_watchdog import main as ingest_watchdog_main
-from wsl2_gpu.transcription_spoke import TranscriptionSpoke
-from wsl2_gpu.vision_spoke import VisionSpoke
-from wsl2_gpu.trajectory_smoother import compute_crop_path
-from wsl2_gpu.vram_orchestrator import VRAMOrchestrator
-from wsl2_gpu.render_spoke import ThreeThreadRenderPipeline
+from wsl2_gpu.vram_orchestrator import (
+    SubprocessPhaseRunner,
+    run_phase1_asr_worker,
+    _run_phase1_asr_worker,
+    run_phase2_vlm_editorial_worker,
+    run_phase3_render_worker,
+)
 
 logger = logging.getLogger("AetherOrchestrator")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
+# Ensure multiprocessing uses spawn for CUDA isolation
+try:
+    mp.set_start_method("spawn", force=True)
+    logger.info("multiprocessing start method set to 'spawn'")
+except RuntimeError:
+    pass  # Already set
+
 
 class Orchestrator:
-    """Project Aether V2 — Sequential In-Process Pipeline Orchestrator.
+    """Project Aether V3 — Subprocess-Isolated Pipeline Orchestrator.
 
-    Phase 1 (ASR):               Whisper-large-v3 INT8 + CTC Alignment (managed by VRAMOrchestrator)
-    Phase 2 (Vision & Editorial): Kornia scene detection + YOLO pose tracking + MoE Editorial debate
-    Phase 3 (Render):            Global Trajectory Optimization + Premultiplied Subtitle Compositing
+    Phase 1 (ASR):               Spawned subprocess (~3.5GB VRAM)
+    Phase 2 (Vision & Editorial): Spawned subprocess (~8.5GB VRAM)
+    Phase 3 (Render):            Spawned subprocess (~4.2GB VRAM)
 
-    All phases execute strictly sequentially with explicit VRAM lifecycle management.
+    All phases execute strictly sequentially with process-level VRAM isolation.
     """
 
     def __init__(self, nats_url: str):
@@ -50,22 +69,18 @@ class Orchestrator:
         self.js = None
         self.orchestrator_start_time = time.time()
 
-        # Sequential VRAM lifecycle manager
-        self.vram = VRAMOrchestrator()
+        # Subprocess phase runners
+        self.phase1_runner = SubprocessPhaseRunner("phase1_asr")
+        self.phase2_runner = SubprocessPhaseRunner("phase2_vlm_editorial")
+        self.phase3_runner = SubprocessPhaseRunner("phase3_render")
 
         # Active serial job tracking
         self.active_state: Optional[PipelineState] = None
         self.active_msg = None  # Original video.ingest message — ACK at the very end
-        self.debate_graph = DebateGraph()
-
-        # Multi-clip render tracking
-        self.pending_renders = 0
-        self.completed_renders = 0
-        self.render_errors = []
 
     async def run(self):
         logger.info(f"Connecting to NATS at {self.nats_url}...")
-        
+
         # Initialize RMM pool if available
         try:
             import rmm
@@ -93,18 +108,26 @@ class Orchestrator:
         # Durable pull subscription for video ingest
         self.ingest_sub = await self.js.pull_subscribe(
             subject=VIDEO_INGEST,
-            durable="orchestrator_ingest_v2",
-            config=ConsumerConfig(ack_wait=900.0, max_ack_pending=12)
+            durable="orchestrator_ingest_v3",
+            config=ConsumerConfig(ack_wait=1800.0, max_ack_pending=4)
         )
 
         # Launch inline ingest watchdog as a background task
         watchdog_task = asyncio.create_task(self._run_ingest_watchdog())
 
-        logger.info("Aether V2 Orchestrator initialized. Entering serial execution loop...")
+        logger.info("Aether V3 Orchestrator initialized. Entering serial execution loop...")
 
         try:
             while True:
                 if self.active_state is None:
+                    # Clean up any defunct child processes reparented to PID 1
+                    while True:
+                        try:
+                            wpid, _ = os.waitpid(-1, os.WNOHANG)
+                            if wpid <= 0:
+                                break
+                        except (ChildProcessError, OSError):
+                            break
                     await self._pull_next_ingest()
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
@@ -117,6 +140,7 @@ class Orchestrator:
     async def _run_ingest_watchdog(self):
         """Runs the ingest watchdog as an inline background task."""
         try:
+            from wsl2_gpu.ingest_watchdog import main as ingest_watchdog_main
             logger.info("Starting inline ingest watchdog...")
             await ingest_watchdog_main()
         except asyncio.CancelledError:
@@ -127,7 +151,7 @@ class Orchestrator:
     # ─── Pull Ingest ─────────────────────────────────────────────────────────
 
     async def _pull_next_ingest(self):
-        """Pulls the next video.ingest message and starts the sequential pipeline."""
+        """Pulls the next video.ingest message and starts the subprocess pipeline."""
         try:
             logger.info("Waiting for next video.ingest message...")
             msgs = await self.ingest_sub.fetch(batch=1, timeout=2.0)
@@ -137,7 +161,7 @@ class Orchestrator:
             pass
 
     async def _start_pipeline_job(self, msg):
-        """Initializes state and orchestrates the full sequential V2 pipeline for one video."""
+        """Orchestrates the full V3 subprocess-isolated pipeline for one video."""
         try:
             payload = json.loads(msg.data.decode("utf-8"))
             source_path = payload.get("source_path")
@@ -151,7 +175,7 @@ class Orchestrator:
             output_dir = f"/data/output_shorts/{video_name_hash}"
             os.makedirs(output_dir, exist_ok=True)
 
-            logger.info(f"🚀 Starting V2 sequential pipeline for: {source_path}")
+            logger.info(f"🚀 Starting V3 subprocess pipeline for: {source_path}")
             logger.info(f"Target Output Folder: {output_dir}")
 
             self.active_state = PipelineState(
@@ -161,290 +185,207 @@ class Orchestrator:
                 current_stage="phase1_asr"
             )
             self.active_msg = msg
-            self.active_job_start_time = time.time()
-            self.pending_renders = 0
-            self.completed_renders = 0
-            self.render_errors = []
+            job_start_time = time.time()
 
             # ═════════════════════════════════════════════════════════════════
-            # PHASE 1: ASR Transcription (Sequential VRAM Lifecycle)
+            # PHASE 1: ASR Transcription (Spawned Subprocess)
             # ═════════════════════════════════════════════════════════════════
-            logger.info("════════════ Phase 1: ASR Transcription ════════════")
-            words: List[WordTimestamp] = []
-            with self.vram.phase('asr') as ctx:
-                spoke = TranscriptionSpoke(self.nats_url)
-                words = await spoke.transcribe_file(source_path)
-                ctx.register(spoke)
+            logger.info("════════════ Phase 1: ASR Transcription [SUBPROCESS] ════════════")
+            phase1_result = await asyncio.to_thread(
+                self.phase1_runner.run_phase,
+                run_phase1_asr_worker,
+                (source_path, self.nats_url)
+            )
 
-            self.active_state.transcript_words = words
-            logger.info(f"Phase 1 complete: Generated {len(words)} word timestamps.")
+            if phase1_result.get("status") != "success":
+                raise RuntimeError(f"Phase 1 failed: {phase1_result.get('error', 'unknown')}")
+
+            words_data = phase1_result.get("words", [])
+            logger.info(f"Phase 1 complete: {len(words_data)} word timestamps")
 
             # Publish audio metadata to NATS for observability
-            audio_payload = {
-                "source_path": source_path,
-                "words": [w.model_dump() for w in words],
-                "timestamp": time.time()
-            }
-            await self.js.publish(METADATA_AUDIO, json.dumps(audio_payload, ensure_ascii=False).encode("utf-8"))
+            try:
+                audio_payload = {
+                    "source_path": source_path,
+                    "words": words_data,
+                    "timestamp": time.time()
+                }
+                await self.js.publish(METADATA_AUDIO, json.dumps(audio_payload, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                logger.warning(f"Could not publish audio metadata to NATS (non-fatal): {e}")
 
             # ═════════════════════════════════════════════════════════════════
-            # PHASE 2: Vision Pre-Pass + Fusion + Editorial Debate
+            # PHASE 2: Vision + VLM Editorial (Spawned Subprocess)
             # ═════════════════════════════════════════════════════════════════
-            logger.info("════════════ Phase 2: Vision & Editorial Debate ════════════")
-            self.active_state.current_stage = "phase2_vision_editorial"
-            scene_changes: List[SceneChange] = []
-            spatial_events: List[SpatialEvent] = []
-            video_duration = 300.0
+            logger.info("════════════ Phase 2: Vision & VLM Editorial [SUBPROCESS] ════════════")
+            self.active_state.current_stage = "phase2_vlm_editorial"
 
-            with self.vram.phase('vision_editorial') as ctx:
-                vision_spoke = VisionSpoke(self.nats_url)
-                await asyncio.to_thread(vision_spoke._load_models)
-                duration, fps, width, height = await asyncio.to_thread(vision_spoke._get_video_info, source_path)
-                video_duration = duration
+            phase2_result = await asyncio.to_thread(
+                self.phase2_runner.run_phase,
+                run_phase2_vlm_editorial_worker,
+                (source_path, words_data, self.nats_url)
+            )
 
-                logger.info(f"Running GPU scene detection and 3-tier spatial tracking for {duration:.1f}s video...")
-                scene_changes = await asyncio.to_thread(vision_spoke.detect_scene_changes, source_path, duration, fps)
-                spatial_events = await asyncio.to_thread(vision_spoke.detect_spatial_events, source_path, duration, fps)
-                ctx.register(vision_spoke)
+            if phase2_result.get("status") != "success":
+                raise RuntimeError(f"Phase 2 failed: {phase2_result.get('error', 'unknown')}")
 
-                # Fuse audio + vision metadata into FusedTimeline
-                fusion_consumer = FusionConsumer(self.nats_url)
-                entries = []
-                for w in words:
-                    w_mid = (w.start + w.end) / 2.0
-                    nearby_sc = [sc for sc in scene_changes if abs(sc.timestamp - w_mid) <= 1.0]
-                    nearby_pe = [pe for pe in spatial_events if abs(pe.timestamp - w_mid) <= 0.5]
-                    entries.append(FusedTimelineEntry(
-                        timestamp=w.start,
-                        word=w.word,
-                        word_end=w.end,
-                        word_confidence=w.confidence,
-                        scene_changes_nearby=nearby_sc,
-                        spatial_events_nearby=nearby_pe
-                    ))
+            scene_data = phase2_result.get("scene_changes", [])
+            spatial_data = phase2_result.get("spatial_events", [])
+            editorial_shorts = phase2_result.get("editorial_shorts", [])
+            transcript_beats = phase2_result.get("transcript_beats", [])
+            video_duration = phase2_result.get("video_duration", 300.0)
 
-                # Run LLM hook analysis
-                await fusion_consumer._run_hook_analysis(entries, scene_changes, spatial_events)
-                ctx.register(fusion_consumer)
+            logger.info(
+                f"Phase 2 complete: {len(scene_data)} scenes, "
+                f"{len(spatial_data)} spatial events, "
+                f"{len(transcript_beats)} transcript beats, "
+                f"{len(editorial_shorts)} editorial shorts"
+            )
 
-                # Clean keypoint data for lighter storage
-                for pe in spatial_events:
-                    pe.keypoints = []
-                for entry in entries:
-                    for pe in entry.spatial_events_nearby:
-                        pe.keypoints = []
-
-                fused_timeline = FusedTimeline(
-                    source_path=source_path,
-                    video_duration=video_duration,
-                    entries=entries,
-                    scene_changes=scene_changes,
-                    spatial_events=spatial_events,
-                    transcript_words=words
-                )
-                self.active_state.fused_timeline = fused_timeline
-
-                # Publish vision and fused metadata
+            # Publish vision metadata to NATS (observability, downsample if massive)
+            try:
+                sample_spatial = spatial_data
+                if len(spatial_data) > 2000:
+                    step = len(spatial_data) // 1000
+                    sample_spatial = spatial_data[::max(1, step)]
                 vision_payload = {
                     "source_path": source_path,
-                    "video_duration": duration,
-                    "scene_changes": [sc.model_dump() for sc in scene_changes],
-                    "spatial_events": [pe.model_dump() for pe in spatial_events],
+                    "video_duration": video_duration,
+                    "scene_changes": scene_data,
+                    "spatial_events": sample_spatial,
                     "timestamp": time.time()
                 }
                 await self.js.publish(METADATA_VISION, json.dumps(vision_payload).encode("utf-8"))
+            except Exception as e:
+                logger.warning(f"Could not publish vision metadata to NATS (non-fatal): {e}")
 
-                fused_payload = {
-                    "source_path": source_path,
-                    "fused_timeline": fused_timeline.model_dump(),
-                    "timestamp": time.time()
-                }
-                await self.js.publish(METADATA_FUSED, json.dumps(fused_payload).encode("utf-8"))
-
-                # Run LangGraph Editor-Director Debate Loop
-                logger.info("Initiating LangGraph Editor↔Director debate...")
-                compiled_graph = self.debate_graph.build_graph()
-                result = await compiled_graph.ainvoke(self.active_state.model_dump())
-
-                manifest_data = result.get("cutting_manifest") if isinstance(result, dict) else getattr(result, "cutting_manifest", None)
-                if manifest_data:
-                    if isinstance(manifest_data, dict):
-                        self.active_state.cutting_manifest = CuttingManifest(**manifest_data)
-                    else:
-                        self.active_state.cutting_manifest = manifest_data
-                    num_clips = len(self.active_state.cutting_manifest.clips)
-                    logger.info(f"Debate consensus achieved. Cutting manifest contains {num_clips} candidate clips.")
-                else:
-                    raise RuntimeError("Debate finished without creating a cutting manifest.")
+            if len(editorial_shorts) < 4:
+                needed = 4 - len(editorial_shorts)
+                logger.warning(f"Only {len(editorial_shorts)}/4 editorial shorts available. Topping up {needed} fallback shorts.")
+                fallback_shorts = self._generate_fallback_shorts(video_duration, existing=editorial_shorts, needed=needed)
+                editorial_shorts.extend(fallback_shorts)
 
             # ═════════════════════════════════════════════════════════════════
-            # PHASE 3: Global Trajectory Optimization + GPU Render
+            # PHASE 3: Render (Spawned Subprocess)
             # ═════════════════════════════════════════════════════════════════
-            logger.info("════════════ Phase 3: Trajectory Optimization & Rendering ════════════")
+            logger.info("════════════ Phase 3: Render [SUBPROCESS] ════════════")
             self.active_state.current_stage = "phase3_render"
 
-            clips = self.active_state.cutting_manifest.clips
-            if not clips or len(clips) < 3:
-                logger.warning("Fewer than 3 clips in cutting manifest. Ensuring 3 candidate clips of >= 50s.")
-                existing_clips = list(clips) if clips else []
-                offsets = [0.0, 55.0, 110.0]
-                while len(existing_clips) < 3:
-                    idx_needed = len(existing_clips)
-                    start_t = offsets[idx_needed] if idx_needed < len(offsets) else (idx_needed * 55.0)
-                    existing_clips.append(ClipManifest(
-                        segments=[VideoSegment(segment_start=start_t, segment_end=start_t + 52.0)],
-                        hook_score=0.75, retention_score=0.75,
-                        cta_present=True,
-                        reasoning=f"Fallback clip {idx_needed + 1} (52s) generated.",
-                        caption_text=f"Short {idx_needed + 1}"
-                    ))
-                clips = existing_clips
-                self.active_state.cutting_manifest.clips = clips
+            render_manifest = {
+                "editorial_shorts": editorial_shorts,
+                "words": words_data,
+                "spatial_events": spatial_data,
+                "scene_changes": scene_data,
+                "transcript_beats": transcript_beats,
+            }
 
-            self.pending_renders = len(clips)
-            self.completed_renders = 0
-            self.render_errors = []
+            phase3_result = await asyncio.to_thread(
+                self.phase3_runner.run_phase,
+                run_phase3_render_worker,
+                (source_path, render_manifest, output_dir)
+            )
 
-            transcript_words_data = [w.model_dump() for w in words]
-            spatial_events_data = [pe.model_dump() for pe in spatial_events]
-            scene_cut_frames = [sc.frame_idx for sc in scene_changes]
+            if phase3_result.get("status") != "success":
+                raise RuntimeError(f"Phase 3 failed: {phase3_result.get('error', 'unknown')}")
 
-            with self.vram.phase('render') as ctx:
-                for idx, clip in enumerate(clips, start=1):
-                    # Compute global trajectory crop path for this specific short clip
-                    # Programmatic Duration Safety Clamp (strictly <= 47.5s)
-                    raw_segs = clip.segments if hasattr(clip, "segments") else clip.get("segments", [])
-                    total_dur = 0.0
-                    clip_segs = []
-                    for s in raw_segs:
-                        s_start = s.get("segment_start", 0.0) if isinstance(s, dict) else s.segment_start
-                        s_end = s.get("segment_end", 0.0) if isinstance(s, dict) else s.segment_end
-                        dur = s_end - s_start
-                        if total_dur + dur > 47.5:
-                            remaining = max(0.0, 47.5 - total_dur)
-                            if remaining >= 2.0:
-                                if isinstance(s, dict):
-                                    s["segment_end"] = round(s_start + remaining, 2)
-                                else:
-                                    s.segment_end = round(s_start + remaining, 2)
-                                clip_segs.append(s)
-                                total_dur += remaining
-                            break
-                        else:
-                            clip_segs.append(s)
-                            total_dur += dur
+            render_results = phase3_result.get("render_results", [])
+            successful = sum(1 for r in render_results if r.get("success"))
+            failed = len(render_results) - successful
 
-                    if hasattr(clip, "segments"):
-                        clip.segments = clip_segs
-                    else:
-                        clip["segments"] = clip_segs
-
-                    clip_duration = total_dur
-                    total_clip_frames = int(clip_duration * 30.0)
-
-                    focal_target_intervals = []
-                    stitched_f_offset = 0
-                    for s in clip_segs:
-                        s_start = s.get("segment_start", 0.0) if isinstance(s, dict) else getattr(s, "segment_start", 0.0)
-                        s_end = s.get("segment_end", 0.0) if isinstance(s, dict) else getattr(s, "segment_end", 0.0)
-                        dur = s_end - s_start
-                        f_count = int(round(dur * 30.0))
-                        f_end = min(total_clip_frames, stitched_f_offset + f_count)
-                        ft = s.get("focal_target", "SPEAKER_PRIMARY") if isinstance(s, dict) else getattr(s, "focal_target", "SPEAKER_PRIMARY")
-                        focal_target_intervals.append((stitched_f_offset, f_end, str(ft)))
-                        stitched_f_offset = f_end
-
-                    if focal_target_intervals and focal_target_intervals[-1][1] < total_clip_frames:
-                        last_s, _, last_ft = focal_target_intervals[-1]
-                        focal_target_intervals[-1] = (last_s, total_clip_frames, last_ft)
-
-                    logger.info(f"Computing global crop trajectory for clip {idx} ({total_clip_frames} frames, {len(focal_target_intervals)} focal segments)...")
-                    crop_path = compute_crop_path(
-                        spatial_events=spatial_events_data,
-                        scene_changes=[{"frame_idx": fi} for fi in scene_cut_frames],
-                        fps=30.0,
-                        total_frames=total_clip_frames,
-                        crop_ratio=1080.0 / 1920.0,
-                        focal_targets=focal_target_intervals
-                    )
-
-                    render_job = RenderJob(
-                        source_path=source_path,
-                        output_dir=output_dir,
-                        clip_manifest=clip,
-                        clip_index=idx,
-                        transcript_words=transcript_words_data,
-                        target_resolution=(1080, 1920),
-                        target_fps=30,
-                        codec="av1_nvenc",
-                        spatial_events=spatial_events_data,
-                        crop_path_data=crop_path.tolist(),
-                        scene_cut_frames=scene_cut_frames
-                    )
-
-                    # Execute 3-thread rendering pipeline in-process
-                    pipeline = ThreeThreadRenderPipeline(render_job, crop_path=crop_path)
-                    success, out_path = await asyncio.to_thread(pipeline.execute)
-
-                    if success:
-                        self.completed_renders += 1
-                        logger.info(f"✅ Clip {idx}/{self.pending_renders} rendered successfully: {out_path}")
-                    else:
-                        err = "; ".join(pipeline.errors) or "Render failed."
-                        self.render_errors.append(f"Clip {idx}: {err}")
-                        self.completed_renders += 1
-                        logger.error(f"❌ Clip {idx} failed: {err}")
-
-                    status_payload = {
-                        "source_path": source_path,
-                        "clip_index": idx,
-                        "status": "success" if success else "failed",
-                        "error": "" if success else err
-                    }
-                    await self.js.publish(PIPELINE_STATUS, json.dumps(status_payload).encode("utf-8"))
+            for r in render_results:
+                status_payload = {
+                    "source_path": source_path,
+                    "clip_index": r.get("clip_index"),
+                    "status": "success" if r.get("success") else "failed",
+                    "error": "; ".join(r.get("errors", []))
+                }
+                await self.js.publish(PIPELINE_STATUS, json.dumps(status_payload).encode("utf-8"))
 
             # ═════════════════════════════════════════════════════════════════
             # Finalization & Metadata Persistence
             # ═════════════════════════════════════════════════════════════════
-            await self._finalize_active_job(success=len(self.render_errors) < self.pending_renders)
+            total_elapsed = time.time() - job_start_time
+            logger.info(
+                f"🎉 V3 Pipeline completed for: {source_path}\n"
+                f"   Rendered {successful}/{len(render_results)} shorts "
+                f"({failed} failed) in {total_elapsed:.1f}s\n"
+                f"   Output: {output_dir}"
+            )
+
+            # Save execution metadata
+            metadata = {
+                "source_path": source_path,
+                "output_dir": output_dir,
+                "pipeline_version": "V3-subprocess",
+                "total_elapsed_s": round(total_elapsed, 2),
+                "editorial_shorts": editorial_shorts,
+                "render_results": render_results,
+                "phase_history": (
+                    self.phase1_runner.history +
+                    self.phase2_runner.history +
+                    self.phase3_runner.history
+                ),
+                "words_count": len(words_data),
+                "scene_changes_count": len(scene_data),
+                "spatial_events_count": len(spatial_data),
+            }
+
+            metadata_file = os.path.join(output_dir, "metadata.json")
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f, indent=2, default=str)
+            logger.info(f"Saved execution metadata to: {metadata_file}")
+
+            await msg.ack()
+            logger.info("ACKed video.ingest message.")
 
         except Exception as e:
             logger.error(f"Pipeline job failed: {e}", exc_info=True)
-            if self.active_state:
-                self.active_state.error_log.append(f"Pipeline exception: {e}")
             if self.active_msg:
                 await self.active_msg.ack()
-            self.active_state = None
-            self.active_msg = None
-
-    async def _finalize_active_job(self, success: bool):
-        """Finalizes the active job: writes metadata.json and ACKs ingest message."""
-        if self.active_state is None or self.active_msg is None:
-            return
-
-        try:
-            self.active_state.pipeline_complete = True
-            if success:
-                rendered_count = self.completed_renders - len(self.render_errors)
-                logger.info(f"🎉 V2 Pipeline successfully completed for: {self.active_state.source_path}")
-                logger.info(f"   Rendered {rendered_count} shorts to: {self.active_state.output_dir}")
-            else:
-                logger.error(f"❌ V2 Pipeline failed for: {self.active_state.source_path}. "
-                            f"Errors: {self.active_state.error_log}")
-
-            metadata_file = os.path.join(self.active_state.output_dir, "metadata.json")
-            with open(metadata_file, "w") as f:
-                json.dump(self.active_state.model_dump(), f, indent=2, default=str)
-            logger.info(f"Saved execution metadata to: {metadata_file}")
-
-            logger.info("ACKing original video.ingest message.")
-            await self.active_msg.ack()
-
-        except Exception as e:
-            logger.error(f"Failed to finalize active job: {e}")
         finally:
             self.active_state = None
             self.active_msg = None
+
+    def _generate_fallback_shorts(self, video_duration: float,
+                                  existing: Optional[List[Dict[str, Any]]] = None,
+                                  needed: int = 4) -> List[Dict[str, Any]]:
+        """Generates fallback editorial shorts to guarantee at least 4 shorts (>= 50s each)."""
+        existing = existing or []
+        shorts = []
+        start = 60.0
+        avail_end = max(start, video_duration - 1.0)
+        target_dur = 50.0 if (avail_end - start) >= (needed * 50.0) else max(30.0, min(50.0, (avail_end - start) / float(max(1, needed))))
+        slots = max(needed, int((avail_end - start) / target_dur))
+        step = (avail_end - start - target_dur) / max(1, slots - 1) if slots > 1 else 0.0
+
+        def collides(s_s: float, s_e: float) -> bool:
+            for ex in existing + shorts:
+                if s_s < ex.get("end_time_seconds", 0) and s_e > ex.get("start_time_seconds", 0):
+                    return True
+            return False
+
+        for step_idx in range(slots + 1):
+            if len(shorts) >= needed:
+                break
+            s_start = start + step_idx * step
+            s_end = s_start + target_dur
+            if s_end > avail_end:
+                s_end = avail_end
+                s_start = s_end - target_dur
+            if s_start < 60.0 or (s_end - s_start) < 30.0:
+                continue
+            if not collides(s_start, s_end):
+                shorts.append({
+                    "start_time_seconds": round(s_start, 2),
+                    "duration_seconds": round(s_end - s_start, 2),
+                    "end_time_seconds": round(s_end, 2),
+                    "title": f"Fallback Short {len(existing) + len(shorts) + 1}",
+                    "reasoning": "Auto-generated balanced fallback narrative segment",
+                    "framing_mode": "SMART_PORTRAIT_PAN",
+                })
+
+        logger.info(f"Generated {len(shorts)} fallback shorts (needed {needed})")
+        return shorts
 
 
 if __name__ == "__main__":

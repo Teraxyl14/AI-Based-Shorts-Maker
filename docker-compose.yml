@@ -28,16 +28,23 @@ services:
       stack: 67108864
     volumes:
       - models_cache:/models
-    command: >
-      --model Qwen/Qwen3-VL-8B-Instruct-FP8
-      --dtype auto
-      --max-model-len 4096
-      --gpu-memory-utilization 0.80
-      --max-num-seqs 4
-      --enforce-eager
-      --port 8000
-      --trust-remote-code
-      --language-model-only
+    command:
+      - --model
+      - Qwen/Qwen3-VL-8B-Instruct-FP8
+      - --dtype
+      - auto
+      - --max-model-len
+      - "3072"
+      - --gpu-memory-utilization
+      - "0.45"
+      - --max-num-seqs
+      - "2"
+      - --limit-mm-per-prompt
+      - '{"image": 16}'
+      - --enforce-eager
+      - --port
+      - "8000"
+      - --trust-remote-code
     restart: unless-stopped
 
   orchestrator:
@@ -45,18 +52,22 @@ services:
       context: .
       dockerfile: wsl2_gpu/Dockerfile.unified
     container_name: aether-orchestrator
+    init: true
     runtime: nvidia
     ipc: host
+    shm_size: "8g"
     environment:
       - NATS_URL=nats://nats:4222
       - VLLM_BRAIN_URL=http://vllm-brain:8000
       - SPATIAL_TRACKER_MODEL=${SPATIAL_TRACKER_MODEL:-yolo26s-pose}
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility,graphics
     volumes:
       - ./data:/data
       - ./shared:/app/shared
       - ./wsl2_gpu:/app/wsl2_gpu
       - models_cache:/data/models
+      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro
     depends_on:
       - nats
     restart: unless-stopped

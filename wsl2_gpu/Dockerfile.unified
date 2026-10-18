@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
 
 WORKDIR /app
 
@@ -8,8 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 libglib2.0-0 \
     libharfbuzz-dev libpango1.0-dev libfreetype6-dev \
+    fonts-noto-core fonts-noto-cjk fonts-noto-extra \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/bin/python
+
+# WSL2 NVIDIA driver library binding for NVDEC/NVENC hardware access
+RUN echo "/usr/lib/wsl/lib" > /etc/ld.so.conf.d/00-wsl-nvidia.conf && ldconfig || true
 
 COPY wsl2_gpu/requirements-unified.txt /app/requirements.txt
 RUN python -m pip install --no-cache-dir -r /app/requirements.txt
@@ -19,5 +23,7 @@ COPY wsl2_gpu /app/wsl2_gpu
 
 ENV PYTHONPATH=/app
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+# Ensure multiprocessing.spawn works correctly in container
+ENV PYTHONDONTWRITEBYTECODE=1
 
 CMD ["python", "wsl2_gpu/orchestrator.py"]

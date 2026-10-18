@@ -14,8 +14,9 @@ logger = logging.getLogger("AetherTrajectorySmoother")
 # Headroom bias: shift crop center 4% upward
 HEADROOM_BIAS_Y = 0.04
 
-# Velocity clamp: max pan per tick as fraction of frame width
-MAX_PAN_PER_TICK = 0.008
+# Velocity clamp: max pan per tick as fraction of frame width (strictly <= 15.0 px/frame)
+MAX_PAN_PER_TICK = 15.0 / 1920.0
+
 
 # Savitzky-Golay parameters for short shots
 SAVGOL_WINDOW = 31

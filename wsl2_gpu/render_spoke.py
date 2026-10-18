@@ -23,8 +23,14 @@ except ImportError:
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from shared.schemas import RenderJob
 from shared.nats_subjects import VIDEO_RENDER, PIPELINE_STATUS
+from wsl2_gpu.trajectory_solver import solve_trajectory
 from wsl2_gpu.trajectory_smoother import compute_crop_path, smooth_trajectory
 from wsl2_gpu.subtitle_compositor import SubtitleCompositor
+from wsl2_gpu.gpu_compositor import (
+    render_dual_pane_split_screen,
+    render_full_frame_topic_closeup,
+    calculate_dynamic_topic_crop_2d
+)
 
 logger = logging.getLogger("AetherRenderSpoke")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -36,62 +42,146 @@ RING_BUFFER_SIZE = 8  # Pre-allocated frame slots in the ring buffer
 # ─── GPU-Resident 2-Mode Universal Framing Helpers ──────────────────────────────────────
 
 def render_smart_portrait_pan(frame: torch.Tensor, cx_norm: float,
-                              target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
-    """MODE 1 — SMART_PORTRAIT_PAN (Full-Height 9:16 Vertical Crop):
-    - Crop full source height (ch = 1.0, H = 1080) and width cw = 607.5px (9:16 ratio).
-    - Center horizontally on the smoothed speaker POI (cx_norm).
-    - Scale to 1080 x 1920 via bilinear interpolation.
-    - Zero digital zoom beyond 1.0x. Natural headroom preserved.
-    Returns: [1, 3, target_h, target_w] float32 tensor in [0, 1].
+                              target_w: int = 1080, target_h: int = 1920,
+                              face_bbox: Optional[Tuple[float, float, float, float]] = None) -> torch.Tensor:
+    """MODE 1 — SMART_PORTRAIT_PAN (Full-Height 9:16 Vertical Crop with Adaptive Headroom):
+    - When face is a tight close-up (face_h >= 0.25 or face_w >= 0.15 of source frame):
+      * Widen crop by 25% (cw = 759px instead of 607px).
+      * Scale foreground to full 1080px width (1080 x 1536).
+      * Position in center vertically, leaving slim 10% (192px) blurred bands top and bottom.
+      * Result: Face is comfortably zoomed out, revealing natural neck, shoulders, and headroom!
+    - When face is medium/wide or unmeasured:
+      * Crop full source height (ch = 1.0, H = 1080) and width cw = 607.5px (9:16 ratio).
+      * 100% full-bleed vertical 9:16 crop with zero blur!
     """
     B, C, src_h, src_w = frame.shape
-    crop_h = float(src_h)
-    crop_w = float(src_h) * (float(target_w) / float(target_h))  # 607.5px for 1080p
 
-    x_center = cx_norm * float(src_w)
-    x0_val = x_center - (crop_w / 2.0)
-    x0 = max(0, min(int(src_w - crop_w), int(round(x0_val))))
-    x1 = int(round(x0 + crop_w))
-    y0 = 0
-    y1 = src_h
+    is_close_up = False
+    if face_bbox is not None and len(face_bbox) >= 4:
+        f_w = float(face_bbox[2])
+        f_h = float(face_bbox[3])
+        if f_h >= 0.25 or f_w >= 0.15:
+            is_close_up = True
 
-    cropped = frame[:, :, y0:y1, x0:x1]
-    resized = torch.nn.functional.interpolate(
-        cropped, size=(target_h, target_w), mode='bilinear', align_corners=False
-    )
-    return resized
+    if is_close_up:
+        # 25% widened crop for comfortable headroom and shoulder framing
+        crop_w = min(float(src_w), float(src_h) * (float(target_w) / float(target_h)) * 1.25)
+        crop_h = float(src_h)
+        x_center = cx_norm * float(src_w)
+        x0_val = x_center - (crop_w / 2.0)
+        x0 = max(0, min(int(src_w - crop_w), int(round(x0_val))))
+        x1 = int(round(x0 + crop_w))
+        cropped = frame[:, :, 0:src_h, x0:x1]
+
+        # Scale foreground to span full width
+        fg_w = target_w
+        fg_h = int(round(float(crop_h) * (float(target_w) / float(crop_w))))
+        layer2 = torch.nn.functional.interpolate(
+            cropped, size=(fg_h, fg_w), mode='bilinear', align_corners=False
+        )
+
+        # Background: soft Gaussian blurred cover
+        scale_cover = max(float(target_w) / float(src_w), float(target_h) / float(src_h))
+        bg_w = int(round(src_w * scale_cover))
+        bg_h = int(round(src_h * scale_cover))
+        bg_scaled = torch.nn.functional.interpolate(frame, size=(bg_h, bg_w), mode='bilinear', align_corners=False)
+        start_x_bg = (bg_w - target_w) // 2
+        start_y_bg = (bg_h - target_h) // 2
+        bg_cropped = bg_scaled[:, :, start_y_bg:start_y_bg + target_h, start_x_bg:start_x_bg + target_w]
+        bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
+        if kornia is not None:
+            bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(12.0, 12.0), border_type='replicate')
+        else:
+            bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=7, stride=1, padding=3, count_include_pad=False)
+        bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
+        canvas = bg_blurred * 0.50
+
+        start_y_fg = max(0, (target_h - fg_h) // 2)
+        end_y_fg = min(target_h, start_y_fg + fg_h)
+        actual_fg_h = end_y_fg - start_y_fg
+        canvas[:, :, start_y_fg:end_y_fg, :] = layer2[:, :, :actual_fg_h, :]
+        return canvas
+    else:
+        crop_h = float(src_h)
+        crop_w = float(src_h) * (float(target_w) / float(target_h))  # 607.5px for 1080p
+
+        x_center = cx_norm * float(src_w)
+        x0_val = x_center - (crop_w / 2.0)
+        x0 = max(0, min(int(src_w - crop_w), int(round(x0_val))))
+        x1 = int(round(x0 + crop_w))
+        y0 = 0
+        y1 = src_h
+
+        cropped = frame[:, :, y0:y1, x0:x1]
+        resized = torch.nn.functional.interpolate(
+            cropped, size=(target_h, target_w), mode='bilinear', align_corners=False
+        )
+        return resized
 
 # Legacy alias for backward compatibility
 render_speaker_solo = render_smart_portrait_pan
+render_full_frame_speaker_tight = render_smart_portrait_pan
 
 
 def render_canvas_graphic_fit(frame: torch.Tensor,
-                              target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
-    """MODE 2 — CANVAS_GRAPHIC_FIT (Full Graphic Preservation):
+                              target_w: int = 1080, target_h: int = 1920,
+                              dynamic_remap: bool = False,
+                              focal_target: Optional[str] = None,
+                              speaker_cx: float = 0.5,
+                              topic_cx: float = 0.5,
+                              topic_cy: float = 0.5,
+                              layout_mode: Optional[str] = None) -> torch.Tensor:
+    """MODE 2 — CANVAS_GRAPHIC_FIT / ZERO-LETTERBOX DYNAMIC COMPOSITING:
     - Background: Scale the 16:9 source to cover 1080 x 1920, downsample 4x,
       apply Gaussian blur (sigma=10.0, k=31), and darken by 45% (bg * 0.55).
     - Foreground: Scale the uncropped 16:9 frame to 1080px width (1080 x 607.5)
       and paste centered vertically at Y = 656px.
-    - Ensures 100% of text on slides, Wikipedia, or wide documents remains readable.
+    - Zero-Letterbox Dynamic Remap: When dynamic_remap is True, eliminates unstyled
+      16:9 blurred letterboxing, dynamically rendering as either:
+      * FULL_FRAME_TOPIC_CLOSEUP (Mode 2) centered directly on the topic / screen
+      * DUAL_PANE_SPLIT_SCREEN (Mode 3) with styled 3-4px #CCFF00 neon glowing divider.
     Returns: [1, 3, target_h, target_w] float32 tensor in [0, 1].
     """
+    if dynamic_remap:
+        target_str = str(focal_target or layout_mode or "").upper().strip()
+        if "SPLIT" in target_str or target_str == "DUAL_PANE_SPLIT_SCREEN":
+            return render_dual_pane_split_screen(
+                frame=frame,
+                speaker_cx=speaker_cx,
+                topic_cx=topic_cx,
+                topic_cy=topic_cy,
+                target_w=target_w,
+                target_h=target_h
+            )
+        elif "TOPIC_CLOSEUP" in target_str or "CLOSEUP" in target_str:
+            return render_full_frame_topic_closeup(
+                frame=frame,
+                cx_norm=topic_cx,
+                cy_norm=topic_cy,
+                target_w=target_w,
+                target_h=target_h
+            )
+
     B, C, src_h, src_w = frame.shape
 
-    # Layer 1: Blurred, darkened cover background
-    scale_factor = float(target_h) / float(src_h)
-    bg_w = int(src_w * scale_factor)
-    bg_scaled = torch.nn.functional.interpolate(frame, size=(target_h, bg_w), mode='bilinear', align_corners=False)
+    # Layer 1: Blurred, darkened cover background with cover scale safeguard
+    scale_cover = max(float(target_w) / float(src_w), float(target_h) / float(src_h))
+    bg_w = int(round(src_w * scale_cover))
+    bg_h = int(round(src_h * scale_cover))
+    bg_scaled = torch.nn.functional.interpolate(frame, size=(bg_h, bg_w), mode='bilinear', align_corners=False)
 
     start_x = (bg_w - target_w) // 2
-    bg_cropped = bg_scaled[:, :, :, start_x:start_x + target_w]
+    start_y_bg = (bg_h - target_h) // 2
+    bg_cropped = bg_scaled[:, :, start_y_bg:start_y_bg + target_h, start_x:start_x + target_w]
 
     bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
     if kornia is not None:
-        bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(10.0, 10.0))
+        bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(10.0, 10.0), border_type='replicate')
     else:
-        bg_blurred_down = bg_down
+        bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=7, stride=1, padding=3, count_include_pad=False)
     bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
     layer1 = bg_blurred * 0.55
+
 
     # Layer 2: Full-fidelity uncropped 16:9 foreground
     fg_w = target_w
@@ -108,6 +198,51 @@ def render_canvas_graphic_fit(frame: torch.Tensor,
 render_content_fit = render_canvas_graphic_fit
 
 
+def render_canvas_uncertainty_fit(frame: torch.Tensor,
+                                  target_w: int = 1080, target_h: int = 1920,
+                                  zoom_factor: float = 1.0) -> torch.Tensor:
+    """UNCERTAINTY FALLBACK FRAMING:
+    Triggered ONLY when the system cannot identify what is being talked about with high confidence
+    (e.g., ambiguous scene, dark/off monitor cutaway, low-entropy visual content).
+
+    - Background (Layer 1): Full 16:9 frame scaled to cover 1080x1920, downsampled 4x,
+      Gaussian blurred (sigma=15.0, k=31), and darkened by 50% (bg * 0.50).
+    - Foreground (Layer 2): Full uncropped 16:9 frame scaled to 100% width (1080 x 608 px),
+      centered vertically (Y = 656px). Zero side margins or floating mini-screen!
+    """
+    B, C, src_h, src_w = frame.shape
+
+    # Layer 1: Blurred, darkened cover background
+    scale_cover = max(float(target_w) / float(src_w), float(target_h) / float(src_h))
+    bg_w = int(round(src_w * scale_cover))
+    bg_h = int(round(src_h * scale_cover))
+    bg_scaled = torch.nn.functional.interpolate(frame, size=(bg_h, bg_w), mode='bilinear', align_corners=False)
+
+    start_x_bg = (bg_w - target_w) // 2
+    start_y_bg = (bg_h - target_h) // 2
+    bg_cropped = bg_scaled[:, :, start_y_bg:start_y_bg + target_h, start_x_bg:start_x_bg + target_w]
+
+    bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
+    if kornia is not None:
+        bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(15.0, 15.0), border_type='replicate')
+    else:
+        bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=9, stride=1, padding=4, count_include_pad=False)
+    bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    layer1 = bg_blurred * 0.50
+
+    # Layer 2: 100% width uncropped 16:9 foreground (zero side margins)
+    fg_w = target_w
+    fg_h = int(round(float(src_h) * (float(fg_w) / float(src_w))))  # 608px
+    layer2 = torch.nn.functional.interpolate(frame, size=(fg_h, fg_w), mode='bilinear', align_corners=False)
+
+    start_y_fg = (target_h - fg_h) // 2  # 656px
+
+    processed = layer1.clone()
+    processed[:, :, start_y_fg:start_y_fg + fg_h, :] = layer2
+
+    return processed
+
+
 def render_broll_pillarbox(source_tensor: torch.Tensor, target_canvas_shape: tuple) -> torch.Tensor:
     """Backward-compatible wrapper for CANVAS_GRAPHIC_FIT layout helper."""
     tgt_h, tgt_w = target_canvas_shape
@@ -122,18 +257,23 @@ HUMAN_DETECTION_LABELS = frozenset({
     "upper_body", "shoulders", "pose", "human", "body", "upper_torso"
 })
 
+SCREEN_DETECTION_LABELS = frozenset({
+    "monitor", "screen", "laptop", "tv", "display", "tablet", "screencast"
+})
+
 
 def classify_shot_framing(shot_start: float, shot_end: float,
                           spatial_events: List[Any],
                           sampling_interval: float = 0.5) -> str:
-    """Classifies an individual shot into SHOT_PORTRAIT_PAN or SHOT_GRAPHIC_FIT.
+    """Classifies an individual shot into SHOT_PORTRAIT_PAN, SHOT_GRAPHIC_FIT, or CANVAS_UNCERTAINTY_FIT.
 
     Directive Rules:
-    - If ANY human face or torso is detected in >= 15% of frames/sampled points in S:
-      Classify shot as 'SHOT_PORTRAIT_PAN'.
-    - If NO human detections exist across >= 85% of frames in S (pure graphics, slides,
-      newspaper clips, widescreen documents, screen UI):
-      Classify shot as 'SHOT_GRAPHIC_FIT'.
+    - High-Confidence Display / Object: If an active screen, monitor, software display, or product is prominent:
+      Classify shot as 'SHOT_GRAPHIC_FIT' to display full widescreen UI.
+    - High-Confidence Speaker: If human face or torso is detected:
+      Classify shot as 'SHOT_PORTRAIT_PAN' (centered speaker portrait).
+    - Uncertainty Fallback: GATED STRICTLY to true unresolvable edge cases (e.g. black/dark scene, unparseable noise).
+      NEVER used freely for standard video footage.
     """
     shot_dur = shot_end - shot_start
     if shot_dur <= 0.0:
@@ -146,45 +286,123 @@ def classify_shot_framing(shot_start: float, shot_end: float,
 
     tolerance = step * 0.75
     human_present_count = 0
+    screen_present_count = 0
+    low_confidence_count = 0
 
     for st in sample_times:
         has_human = False
+        has_screen = False
+        max_conf = 0.0
         for pe in spatial_events:
             ts = pe.get("timestamp", 0.0) if isinstance(pe, dict) else getattr(pe, "timestamp", 0.0)
             if abs(ts - st) <= tolerance:
                 conf = float(pe.get("confidence", 0.0) if isinstance(pe, dict) else getattr(pe, "confidence", 0.0))
                 lbl = str(pe.get("label", "") if isinstance(pe, dict) else getattr(pe, "label", "")).lower().strip()
-                if conf >= 0.35 and lbl in HUMAN_DETECTION_LABELS:
-                    has_human = True
-                    break
+                max_conf = max(max_conf, conf)
+                if conf >= 0.45:
+                    if lbl in HUMAN_DETECTION_LABELS:
+                        has_human = True
+                    if lbl in SCREEN_DETECTION_LABELS:
+                        has_screen = True
         if has_human:
             human_present_count += 1
+        if has_screen:
+            screen_present_count += 1
+        if max_conf < 0.20:
+            low_confidence_count += 1
 
-    human_ratio = human_present_count / float(len(sample_times))
+    total_samples = float(len(sample_times))
+    human_ratio = human_present_count / total_samples
+    screen_ratio = screen_present_count / total_samples
+    uncertain_ratio = low_confidence_count / total_samples
+
+    # 1. High-confidence active screen / monitor UI
+    if screen_ratio >= 0.25 and screen_ratio >= (human_ratio * 0.7):
+        return "SHOT_GRAPHIC_FIT"
+
+    # 2. High-confidence speaker portrait
     if human_ratio >= 0.15:
         return "SHOT_PORTRAIT_PAN"
-    else:
+
+    # 3. If any screen/display detected
+    if screen_ratio > 0.0:
         return "SHOT_GRAPHIC_FIT"
+
+    # 4. Screencast, software UI, gameplay, map, or graphic display (no human present):
+    # Route directly to complete 9:16 vertical ratio (zero letterbox) via SHOT_GRAPHIC_FIT
+    if human_ratio == 0.0:
+        return "SHOT_GRAPHIC_FIT"
+
+    # Default to portrait pan for standard footage
+    return "SHOT_PORTRAIT_PAN"
+
+
+MIN_SHOT_DURATION = 2.0  # Minimum shot duration in seconds to eliminate jitter and split-second flashes
 
 
 def build_shot_framing_schedule(total_duration: float,
                                 mapped_cuts: List[Dict[str, Any]],
-                                spatial_events: List[Any]) -> List[Tuple[float, float, str]]:
-    """Builds a per-shot framing schedule across the clip timeline."""
-    cut_timestamps = sorted(set([0.0] + [
-        c.get("timestamp", 0.0) if isinstance(c, dict) else getattr(c, "timestamp", 0.0)
+                                spatial_events: List[Any],
+                                min_shot_duration: float = MIN_SHOT_DURATION) -> List[Tuple[float, float, str]]:
+    """Builds a smooth, jitter-free per-shot framing schedule across the clip timeline.
+
+    Enforces:
+    1. Minimum Shot Dwell Time (min_shot_duration = 2.0s):
+       Adjacent raw scene cuts separated by < min_shot_duration are pruned to prevent rapid micro-shots.
+    2. Temporal Hysteresis Debouncing:
+       If shot i is Mode A, shot i+1 is Mode B with duration < 2.5s, and shot i+2 returns to Mode A,
+       absorbs shot i+1 into Mode A to eliminate 1-frame or split-second visual flashes.
+    3. Consecutive Shot Collapsing:
+       Adjacent shots sharing the same framing mode are merged into single continuous intervals.
+    """
+    raw_cuts = sorted(set([0.0] + [
+        float(c.get("timestamp", 0.0) if isinstance(c, dict) else getattr(c, "timestamp", 0.0))
         for c in mapped_cuts
-        if 0.0 < (c.get("timestamp", 0.0) if isinstance(c, dict) else getattr(c, "timestamp", 0.0)) < total_duration
+        if 0.0 < float(c.get("timestamp", 0.0) if isinstance(c, dict) else getattr(c, "timestamp", 0.0)) < total_duration
     ] + [total_duration]))
 
-    schedule = []
-    for i in range(len(cut_timestamps) - 1):
-        s_start = cut_timestamps[i]
-        s_end = cut_timestamps[i + 1]
-        mode = classify_shot_framing(s_start, s_end, spatial_events)
-        schedule.append((s_start, s_end, mode))
+    # Step 1: Prune micro-cuts separated by < min_shot_duration
+    filtered_cuts = [0.0]
+    for cut in raw_cuts[1:-1]:
+        if (cut - filtered_cuts[-1]) >= min_shot_duration and (total_duration - cut) >= 1.0:
+            filtered_cuts.append(cut)
+    filtered_cuts.append(total_duration)
 
-    return schedule
+    # Step 2: Classify initial shot intervals
+    initial_schedule = []
+    for i in range(len(filtered_cuts) - 1):
+        s_start = filtered_cuts[i]
+        s_end = filtered_cuts[i + 1]
+        mode = classify_shot_framing(s_start, s_end, spatial_events)
+        initial_schedule.append([s_start, s_end, mode])
+
+    if not initial_schedule:
+        return [(0.0, total_duration, "SHOT_PORTRAIT_PAN")]
+
+    # Step 3: Temporal Hysteresis Debouncing (sandwich elimination)
+    # If A -> B -> A and B duration < 2.5s, absorb B into A
+    if len(initial_schedule) >= 3:
+        for i in range(1, len(initial_schedule) - 1):
+            prev_mode = initial_schedule[i - 1][2]
+            curr_mode = initial_schedule[i][2]
+            next_mode = initial_schedule[i + 1][2]
+            curr_dur = initial_schedule[i][1] - initial_schedule[i][0]
+            if prev_mode == next_mode and curr_mode != prev_mode and curr_dur < 2.5:
+                initial_schedule[i][2] = prev_mode
+
+    # Step 4: Collapse consecutive shots with identical mode
+    collapsed: List[Tuple[float, float, str]] = []
+    for s_start, s_end, mode in initial_schedule:
+        if not collapsed:
+            collapsed.append((s_start, s_end, mode))
+        else:
+            prev_start, prev_end, prev_mode = collapsed[-1]
+            if prev_mode == mode:
+                collapsed[-1] = (prev_start, s_end, mode)
+            else:
+                collapsed.append((s_start, s_end, mode))
+
+    return collapsed
 
 
 # ─── Event Stub for CPU execution ───────────────────────────────────────────
@@ -274,6 +492,17 @@ class ThreeThreadRenderPipeline:
 
     def _map_original_to_stitched(self, original_ts: float, segments: List[Any]) -> Optional[float]:
         stitched_offset = 0.0
+        total_dur = sum(
+            (seg.segment_end - seg.segment_start) if hasattr(seg, "segment_end")
+            else (seg.get("segment_end", 0.0) - seg.get("segment_start", 0.0))
+            for seg in segments
+        )
+        # If timestamp is already relative / normalized to the clip [0, total_dur]
+        if 0.0 <= original_ts <= total_dur + 0.1 and segments:
+            first_s = getattr(segments[0], "segment_start", 0.0) if hasattr(segments[0], "segment_start") else segments[0].get("segment_start", 0.0)
+            if original_ts < first_s:
+                return original_ts  # Already normalized!
+
         for seg in segments:
             s_start = seg.segment_start if hasattr(seg, "segment_start") else seg.get("segment_start", 0.0)
             s_end = seg.segment_end if hasattr(seg, "segment_end") else seg.get("segment_end", 0.0)
@@ -318,7 +547,7 @@ class ThreeThreadRenderPipeline:
                 else (s.segment_end - s.segment_start)
                 for s in segs
             ])
-            total_frames = int(total_duration * self.job.target_fps) + 30
+            total_frames = int(round(total_duration * float(self.job.target_fps)))
             
             # Map spatial events and cuts to the stitched timeline
             mapped_events = []
@@ -338,6 +567,8 @@ class ThreeThreadRenderPipeline:
                         new_pe = copy.copy(pe)
                         new_pe.timestamp = stitched_ts
                         mapped_events.append(new_pe)
+
+            self.mapped_spatial_events = mapped_events
             
             mapped_cuts = []
             stitched_offset = 0.0
@@ -387,15 +618,16 @@ class ThreeThreadRenderPipeline:
                     self.crop_path = np.array(self.job.crop_path_data, dtype=np.float64)
                     logger.info(f"[Clip {self.idx}] Ingested pre-computed crop path of shape {self.crop_path.shape}")
                 else:
-                    logger.info(f"[Clip {self.idx}] Computing global trajectory path for {total_frames} frames...")
-                    self.crop_path = compute_crop_path(
+                    logger.info(f"[Clip {self.idx}] Computing global OSQP trajectory path for {total_frames} frames...")
+                    self.crop_path = solve_trajectory(
                         spatial_events=mapped_events,
                         scene_changes=mapped_cuts,
                         fps=float(self.job.target_fps),
                         total_frames=total_frames,
-                        crop_ratio=float(self.job.target_resolution[0]) / float(self.job.target_resolution[1]),
+                        clip_start_s=0.0,
                         focal_targets=focal_target_intervals
                     )
+
 
             target_w, target_h = self.job.target_resolution
 
@@ -580,29 +812,38 @@ class ThreeThreadRenderPipeline:
                     data = proc.stdout.read(frame_bytes)
                     if not data or len(data) < frame_bytes:
                         break
-                    
+
                     # Block until a slot is free in the ring buffer
-                    self.empty_slots.acquire()
-                    if self.stop_event.is_set():
+                    acquired = False
+                    while not self.stop_event.is_set():
+                        if self.empty_slots.acquire(timeout=0.1):
+                            acquired = True
+                            break
+                    if not acquired or self.stop_event.is_set():
                         break
-                    
+
                     arr = np.frombuffer(data, dtype=np.uint8).reshape(src_h, src_w, 3)
                     cpu_tensor = torch.from_numpy(arr)
-                    
+
                     # Copy to GPU slot
                     self.decode_slots[slot].copy_(cpu_tensor, non_blocking=True)
-                    
+
                     # Record completion event
                     self.decode_events[slot].record()
-                    
+
                     # Pass index to inference thread
                     self.decode_to_inference.put(slot)
-                    
+
                     slot = (slot + 1) % RING_BUFFER_SIZE
                     self.frame_count += 1
-                    
-                proc.terminate()
-                proc.wait()
+
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
                 if self.stop_event.is_set():
                     break
 
@@ -640,7 +881,12 @@ class ThreeThreadRenderPipeline:
             target_fps = float(self.job.target_fps)
 
             while not self.stop_event.is_set():
-                slot = self.decode_to_inference.get()
+                try:
+                    slot = self.decode_to_inference.get(timeout=0.2)
+                except queue.Empty:
+                    if self.decode_done.is_set() and self.decode_to_inference.empty():
+                        break
+                    continue
                 if slot is None:
                     break
 
@@ -665,44 +911,143 @@ class ThreeThreadRenderPipeline:
                     seg_offset += dur
 
                 # Get pre-computed smoothed crop center from global trajectory optimizer
-                if self.crop_path is not None and frame_idx < len(self.crop_path):
-                    cx_norm, cy_norm = self.crop_path[frame_idx]
+                if self.crop_path is not None and len(self.crop_path) > 0:
+                    idx_clamped = min(frame_idx, len(self.crop_path) - 1)
+                    cx_norm = float(self.crop_path[idx_clamped, 0])
+                    cy_norm = float(self.crop_path[idx_clamped, 1])
+                    w_crop_norm = float(self.crop_path[idx_clamped, 2]) if self.crop_path.shape[1] >= 4 else None
+                    h_crop_norm = float(self.crop_path[idx_clamped, 3]) if self.crop_path.shape[1] >= 4 else None
                 else:
-                    cx_norm, cy_norm = 0.5, 0.5
+                    cx_norm, cy_norm, w_crop_norm, h_crop_norm = 0.5, 0.5, None, None
 
                 # Source frame as float [1, C, H, W] in [0, 1]
                 frame = self.decode_slots[slot].permute(2, 0, 1).unsqueeze(0).float() / 255.0
 
-                # Shot-Level Adaptive Framing Dispatch (SHOT_PORTRAIT_PAN vs SHOT_GRAPHIC_FIT)
-                shot_mode = "SHOT_PORTRAIT_PAN"
+                # Extract topic and speaker coordinates from grounded_target
+                target_cx = cx_norm
+                target_cy = cy_norm if cy_norm is not None else 0.5
+                spk_cx = cx_norm
+
+                gt = getattr(current_seg, "grounded_target", None) if hasattr(current_seg, "grounded_target") else current_seg.get("grounded_target", None)
+                if gt is not None:
+                    p_bbox = getattr(gt, "primary_bbox", None) if not isinstance(gt, dict) else gt.get("primary_bbox")
+                    if p_bbox and len(p_bbox) >= 2:
+                        target_cx = float(p_bbox[0])
+                        target_cy = float(p_bbox[1])
+                    s_bbox = getattr(gt, "secondary_bbox", None) if not isinstance(gt, dict) else gt.get("secondary_bbox")
+                    if s_bbox and len(s_bbox) >= 2:
+                        spk_cx = float(s_bbox[0])
+
+                split_cfg = getattr(current_seg, "split_screen_config", None) if hasattr(current_seg, "split_screen_config") else current_seg.get("split_screen_config", None)
+
+                # Prioritize Segment Layout Mode from Autonomous Self-Correction Loop
+                raw_layout = getattr(current_seg, "layout_mode", None) if hasattr(current_seg, "layout_mode") else current_seg.get("layout_mode", None)
+                if hasattr(raw_layout, "value"):
+                    raw_val = raw_layout.value
+                else:
+                    raw_val = str(raw_layout) if raw_layout is not None else None
+                norm_layout = str(raw_val).upper().strip() if raw_val else None
+
+                # Determine Shot-Level Adaptive Framing Mode
+                shot_mode = None
                 if self.shot_framing_schedule:
                     for s_start, s_end, s_mode in self.shot_framing_schedule:
                         if s_start <= stitched_time < s_end:
                             shot_mode = s_mode
                             break
-                    else:
-                        shot_mode = self.shot_framing_schedule[-1][2]
-                else:
-                    # Fallback to segment layout if schedule is empty
-                    raw_layout = getattr(current_seg, "layout_mode", "SMART_PORTRAIT_PAN") if hasattr(current_seg, "layout_mode") else current_seg.get("layout_mode", "SMART_PORTRAIT_PAN")
-                    norm_layout = str(raw_layout).upper().strip()
-                    if norm_layout in ("CANVAS_GRAPHIC_FIT", "CONTENT_FIT", "BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL"):
-                        shot_mode = "SHOT_GRAPHIC_FIT"
-                    else:
-                        shot_mode = "SHOT_PORTRAIT_PAN"
 
-                if shot_mode in ("SHOT_GRAPHIC_FIT", "CANVAS_GRAPHIC_FIT"):
-                    rendered_tensor = render_canvas_graphic_fit(
+                # Query active face bounding box for comfortable headroom
+                current_face_bbox = None
+                if hasattr(self, "mapped_spatial_events") and self.mapped_spatial_events:
+                    for pe in self.mapped_spatial_events:
+                        ts = pe.get("timestamp", 0.0) if isinstance(pe, dict) else getattr(pe, "timestamp", 0.0)
+                        if abs(ts - stitched_time) <= 0.35:
+                            lbl = str(pe.get("label", "") if isinstance(pe, dict) else getattr(pe, "label", "")).lower().strip()
+                            if lbl in HUMAN_DETECTION_LABELS or lbl in ("face", "head", "person", "upper_body"):
+                                bbox = pe.get("bbox", None) if isinstance(pe, dict) else getattr(pe, "bbox", None)
+                                if bbox and len(bbox) >= 4:
+                                    current_face_bbox = bbox
+                                    break
+
+                # Self-Aware Universal Framing Hierarchy:
+                # 1. Uncertainty Fallback: Emergency fallback strictly for true unresolvable dark noise / corrupted frames
+                if shot_mode in ("CANVAS_UNCERTAINTY_FIT", "SHOT_UNCERTAINTY_FIT") or (norm_layout and ("UNCERTAINTY" in norm_layout or "CANVAS_UNCERTAINTY_FIT" in norm_layout)):
+                    rendered_tensor = render_canvas_uncertainty_fit(
                         frame=frame,
                         target_w=target_w,
                         target_h=target_h
                     )
-                else:  # SHOT_PORTRAIT_PAN / SMART_PORTRAIT_PAN (Full-height 9:16 crop at cx_norm)
+                # 2. Universal Monitor & Graphic Display: Complete 9:16 vertical crop centered on demonstrated UI/screen
+                elif shot_mode in ("SHOT_GRAPHIC_FIT", "CANVAS_GRAPHIC_FIT") or (norm_layout and ("FOCAL_DISPLAY" in norm_layout or "CANVAS_GRAPHIC_FIT" in norm_layout or "CONTENT_FIT" in norm_layout or norm_layout in ("BROLL", "GRAPHIC", "FULL_SCREEN", "B_ROLL") or getattr(current_seg, "focal_target", None) == "FOCAL_DISPLAY")):
+                    rendered_tensor = render_full_frame_topic_closeup(
+                        frame=frame,
+                        cx_norm=target_cx if target_cx is not None else 0.5,
+                        cy_norm=target_cy if target_cy is not None else 0.5,
+                        w_crop_norm=w_crop_norm,
+                        h_crop_norm=h_crop_norm,
+                        target_w=target_w,
+                        target_h=target_h
+                    )
+                # 3. Dual-Pane Split Screen: Strictly requires verified distinct entities with >= 0.28 separation.
+                #    If no verified separation, never duplicate the screen; route to 9:16 topic or speaker portrait.
+                elif norm_layout and ("SPLIT" in norm_layout or norm_layout == "DUAL_PANE_SPLIT_SCREEN"):
+                    is_screen_focal = getattr(current_seg, "focal_target", None) in ("FOCAL_DISPLAY", "SCREEN")
+                    if abs(spk_cx - target_cx) >= 0.28 and not is_screen_focal:
+                        rendered_tensor = render_dual_pane_split_screen(
+                            frame=frame,
+                            speaker_cx=spk_cx,
+                            topic_cx=target_cx,
+                            topic_cy=target_cy,
+                            target_w=target_w,
+                            target_h=target_h,
+                            config=split_cfg
+                        )
+                    elif shot_mode == "SHOT_PORTRAIT_PAN":
+                        rendered_tensor = render_smart_portrait_pan(
+                            frame=frame,
+                            cx_norm=cx_norm,
+                            target_w=target_w,
+                            target_h=target_h,
+                            face_bbox=current_face_bbox
+                        )
+                    else:
+                        rendered_tensor = render_full_frame_topic_closeup(
+                            frame=frame,
+                            cx_norm=target_cx,
+                            cy_norm=target_cy,
+                            w_crop_norm=w_crop_norm,
+                            h_crop_norm=h_crop_norm,
+                            target_w=target_w,
+                            target_h=target_h
+                        )
+                # 4. High-Confidence Human Speaker Portrait: Centered horizontally with OSQP trajectory & adaptive headroom
+                elif shot_mode == "SHOT_PORTRAIT_PAN" or (norm_layout and ("SPEAKER" in norm_layout or norm_layout in ("FULL_FRAME_SPEAKER_TIGHT", "SMART_PORTRAIT_PAN", "SHOT_PORTRAIT_PAN"))):
                     rendered_tensor = render_smart_portrait_pan(
                         frame=frame,
                         cx_norm=cx_norm,
                         target_w=target_w,
+                        target_h=target_h,
+                        face_bbox=current_face_bbox
+                    )
+                # 5. Non-Screen Physical Object Close-up
+                elif norm_layout and ("TOPIC" in norm_layout or "CLOSEUP" in norm_layout or norm_layout in ("FULL_FRAME_TOPIC_CLOSEUP", "TOPIC_FOCAL")):
+                    rendered_tensor = render_full_frame_topic_closeup(
+                        frame=frame,
+                        cx_norm=target_cx,
+                        cy_norm=target_cy,
+                        w_crop_norm=w_crop_norm,
+                        h_crop_norm=h_crop_norm,
+                        target_w=target_w,
                         target_h=target_h
+                    )
+                # 6. Default Fallback
+                else:
+                    rendered_tensor = render_smart_portrait_pan(
+                        frame=frame,
+                        cx_norm=cx_norm,
+                        target_w=target_w,
+                        target_h=target_h,
+                        face_bbox=current_face_bbox
                     )
                 # Uniform Subtitle Anchor: Y = 65% (Y ≈ 1248px)
                 sub_baseline_y = float(target_h) * 0.65
@@ -712,9 +1057,20 @@ class ThreeThreadRenderPipeline:
                 # Subtitle Compositor (Premultiplied Alpha Porter-Duff Over)
                 if self.subtitle_compositor and self.job.transcript_words:
                     frame_float = processed.unsqueeze(0).float() / 255.0
+                    w_words = self.job.transcript_words
+                    w_first = w_words[0]
+                    w_min = float(w_first.get("start", 0.0) if isinstance(w_first, dict) else getattr(w_first, "start", 0.0))
+                    first_seg_s = getattr(self.clip.segments[0], "segment_start", 0.0) if hasattr(self.clip.segments[0], "segment_start") else self.clip.segments[0].get("segment_start", 0.0)
+
+                    # Accurately detect whether word timestamps are in absolute video time or 0-based
+                    if w_min >= (first_seg_s - 5.0) and w_min > 5.0:
+                        lookup_time = original_time
+                    else:
+                        lookup_time = stitched_time
+
                     processed_with_subs = self.subtitle_compositor.composite_frame(
                         frame=frame_float,
-                        timestamp=original_time,
+                        timestamp=lookup_time,
                         words=self.job.transcript_words,
                         target_w=target_w,
                         target_h=target_h,
@@ -739,12 +1095,22 @@ class ThreeThreadRenderPipeline:
             self.stop_event.set()
         finally:
             self.inference_to_encode.put(None)  # Sentinel
+            for _ in range(RING_BUFFER_SIZE):
+                try:
+                    self.empty_slots.release()
+                except ValueError:
+                    pass
             self.inference_done.set()
 
     # ─── Thread 3: Encode Thread ─────────────────────────────────────────────
 
     def _encode_thread(self, wav_path: str, output_path: str, target_w: int, target_h: int, codec_to_use: str):
         try:
+            total_duration = sum([
+                (s.get("segment_end", 0.0) - s.get("segment_start", 0.0)) if isinstance(s, dict)
+                else (s.segment_end - s.segment_start)
+                for s in self.clip.segments
+            ])
             cmd = [
                 "ffmpeg", "-y",
                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{target_w}x{target_h}", "-r", str(self.job.target_fps),
@@ -759,46 +1125,63 @@ class ThreeThreadRenderPipeline:
             else:
                 cmd += ["-preset", "medium", "-crf", "20"]
 
+            if total_duration > 0:
+                cmd += ["-t", f"{total_duration:.3f}"]
+
             cmd += [
                 "-c:a", "aac", "-b:a", "128k",
                 "-movflags", "+faststart",
                 output_path
             ]
-            
+
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-            
+
             while not self.stop_event.is_set():
-                slot = self.inference_to_encode.get()
+                try:
+                    slot = self.inference_to_encode.get(timeout=0.2)
+                except queue.Empty:
+                    if self.inference_done.is_set() and self.inference_to_encode.empty():
+                        break
+                    continue
                 if slot is None:
                     break
-                
+
                 # Wait for inference processing to finish on GPU
                 self.inference_events[slot].synchronize()
-                
+
                 # Copy processed vertical frame to host CPU and write to pipe
                 cpu_bytes = self.render_slots[slot].cpu().numpy().tobytes()
-                proc.stdin.write(cpu_bytes)
-                
+                try:
+                    proc.stdin.write(cpu_bytes)
+                except (BrokenPipeError, IOError):
+                    self.stop_event.set()
+                    self.empty_slots.release()
+                    break
+
                 # Free the slot back to decode thread
                 self.empty_slots.release()
-                
-            proc.stdin.close()
+
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, IOError):
+                pass
             stderr_output = proc.stderr.read().decode('utf-8', errors='ignore')
             proc.wait()
-            
+
             if proc.returncode != 0:
                 raise RuntimeError(f"FFmpeg encoding failed with returncode {proc.returncode}: {stderr_output}")
-                
+
         except Exception as e:
             logger.critical(f"HARDWARE TRACE - Encode thread failed: {e}", exc_info=True)
             self.errors.append(f"HARDWARE TRACE - Encode thread error: {e}")
+            self.stop_event.set()
+        finally:
             self.stop_event.set()
             for _ in range(RING_BUFFER_SIZE):
                 try:
                     self.empty_slots.release()
                 except ValueError:
                     pass
-        finally:
             self.encode_done.set()
 
     def _generate_thumbnail(self, source_path: str):
