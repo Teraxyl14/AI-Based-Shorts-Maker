@@ -35,6 +35,7 @@ from wsl2_gpu.render_spoke import (
     classify_shot_framing,
     build_shot_framing_schedule
 )
+from wsl2_gpu.vram_orchestrator import VRAMOrchestrator
 from shared.schemas import VideoSegment
 
 

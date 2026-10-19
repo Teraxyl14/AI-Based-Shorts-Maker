@@ -20,6 +20,7 @@ import time
 import logging
 import threading
 import warnings
+from contextlib import contextmanager
 import multiprocessing as mp
 from typing import Optional, Dict, Any, List, Tuple, Set
 
@@ -45,6 +46,121 @@ PHASE_BUDGETS = {
         'estimated_gb': 4.2,
     },
 }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# IN-PROCESS PHASE-SEQUENTIAL VRAM LIFECYCLE CONTEXT MANAGERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+class VRAMOrchestrator:
+    """Phase-sequential VRAM lifecycle manager.
+
+    Provides context managers that govern model loading/unloading across
+    the three pipeline phases. Ensures each phase starts with a clean
+    CUDA memory state.
+    """
+
+    def __init__(self):
+        self._current_phase: Optional[str] = None
+        self._phase_history: list = []
+        self._registered_objects: list = []
+
+    def _get_gpu_memory_stats(self) -> Dict[str, float]:
+        """Returns current GPU memory usage in GB."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+                reserved = torch.cuda.memory_reserved() / (1024 ** 3)
+                total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+                return {
+                    'allocated_gb': round(allocated, 2),
+                    'reserved_gb': round(reserved, 2),
+                    'total_gb': round(total, 2),
+                    'free_gb': round(total - allocated, 2),
+                }
+        except Exception:
+            pass
+        return {'allocated_gb': 0, 'reserved_gb': 0, 'total_gb': 0, 'free_gb': 0}
+
+    def _purge_vram(self):
+        """Aggressively frees all GPU memory."""
+        for obj in self._registered_objects:
+            try:
+                del obj
+            except Exception:
+                pass
+        self._registered_objects.clear()
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception:
+            pass
+        gc.collect()
+
+    @contextmanager
+    def phase(self, name: str):
+        """Context manager for a VRAM lifecycle phase."""
+        if self._current_phase is not None:
+            raise RuntimeError(
+                f"Cannot enter phase '{name}' while phase '{self._current_phase}' is active. "
+                f"Phases must be strictly sequential."
+            )
+
+        budget = PHASE_BUDGETS.get(name, {})
+        desc = budget.get('description', 'Unknown phase')
+        est_gb = budget.get('estimated_gb', 0)
+
+        self._current_phase = name
+        self._registered_objects.clear()
+        phase_start = time.time()
+
+        mem_before = self._get_gpu_memory_stats()
+        logger.info(
+            f"═══ VRAM Phase '{name}' ENTER ═══ "
+            f"({desc}, est. {est_gb:.1f}GB) | "
+            f"GPU: {mem_before['allocated_gb']:.2f}GB allocated, "
+            f"{mem_before['free_gb']:.2f}GB free"
+        )
+
+        ctx = PhaseContext(self)
+        try:
+            yield ctx
+        finally:
+            elapsed = time.time() - phase_start
+            mem_during = self._get_gpu_memory_stats()
+            self._purge_vram()
+            mem_after = self._get_gpu_memory_stats()
+            freed = mem_during['allocated_gb'] - mem_after['allocated_gb']
+
+            self._phase_history.append({
+                'name': name,
+                'elapsed_s': round(elapsed, 2),
+                'peak_gb': mem_during['allocated_gb'],
+                'freed_gb': round(freed, 2),
+            })
+            self._current_phase = None
+
+    def get_phase_report(self) -> list:
+        """Returns a summary of all completed phases."""
+        return list(self._phase_history)
+
+
+class PhaseContext:
+    """Helper object yielded by VRAMOrchestrator.phase() context manager."""
+
+    def __init__(self, orchestrator: VRAMOrchestrator):
+        self._orchestrator = orchestrator
+
+    def register(self, *objects):
+        self._orchestrator._registered_objects.extend(objects)
+
+    @property
+    def phase_name(self) -> str:
+        return self._orchestrator._current_phase or "unknown"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

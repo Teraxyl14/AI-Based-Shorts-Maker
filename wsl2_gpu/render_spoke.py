@@ -280,7 +280,7 @@ def classify_shot_framing(shot_start: float, shot_end: float,
     wide_dialogue_ratio = wide_dialogue_count / total_samples
 
     # 1. High-confidence screen/monitor display without dominant human
-    if screen_ratio >= 0.35 and human_ratio < 0.15:
+    if screen_ratio >= 0.15 and human_ratio < 0.15:
         return "SHOT_GRAPHIC_FIT"
 
     # Default: 100% full-bleed vertical 9:16 portrait pan for all dialogue and narrative footage
