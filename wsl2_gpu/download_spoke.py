@@ -149,13 +149,20 @@ def purge_processed_source_video(source_path: str) -> bool:
     # Safety check: Must be inside input_videos directory
     norm_source = os.path.normpath(source_path)
     norm_input_dir = os.path.normpath(INPUT_VIDEOS_DIR)
-    if not norm_source.startswith(norm_input_dir):
+    is_valid_dir = (
+        norm_source.startswith(norm_input_dir) or
+        norm_source.startswith("/data/input_videos") or
+        norm_source.startswith("\\data\\input_videos")
+    )
+    if not is_valid_dir:
         logger.warning(f"Refusing to purge file outside input_videos: {source_path}")
         return False
 
     # Verify that at least 1 certified short exists for this video
     video_hash = hashlib.md5(source_path.encode()).hexdigest()
     shorts_dir = os.path.join(OUTPUT_SHORTS_DIR, video_hash)
+    if not os.path.exists(shorts_dir) and os.path.exists(f"/data/output_shorts/{video_hash}"):
+        shorts_dir = f"/data/output_shorts/{video_hash}"
 
     has_valid_shorts = False
     if os.path.exists(shorts_dir) and os.path.isdir(shorts_dir):
