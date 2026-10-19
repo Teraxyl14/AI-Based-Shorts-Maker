@@ -28,8 +28,8 @@ TORSO_WEIGHT = 0.25
 ITEM_WEIGHT = 0.10
 
 # OSQP objective penalties
-LAMBDA_V = 50.0   # Velocity smoothness penalty (anti-hunting tripod lock)
-LAMBDA_A = 90.0   # Acceleration smoothness penalty (silky cinematic pan)
+LAMBDA_V = 20.0   # Velocity smoothness penalty (responsive cinematic pan)
+LAMBDA_A = 35.0   # Acceleration smoothness penalty (responsive cinematic pan)
 
 # Hard constraints for 1920px source, 607.5px crop (9:16 from 16:9)
 CROP_WIDTH_PX = 607.5
@@ -118,7 +118,8 @@ def fuse_point_of_interest(spatial_events: List[Any],
                            src_width: float = SRC_WIDTH_PX,
                            src_height: float = 1080.0,
                            focal_targets: Optional[List[Any]] = None,
-                           return_2d: bool = False) -> Any:
+                           return_2d: bool = False,
+                           scene_changes: Optional[List[Any]] = None) -> Any:
     """Calculates per-frame focus coordinates using active-speaker motion-gated POI fusion and 2D focal target routing.
 
     Active Speaker Gating:
@@ -215,15 +216,45 @@ def fuse_point_of_interest(spatial_events: List[Any],
             cy_norm = float(bbox[1]) if len(bbox) > 1 else 0.5
             bw_norm = float(bbox[2]) if len(bbox) > 2 else 0.3
             bh_norm = float(bbox[3]) if len(bbox) > 3 else 0.3
-            cx_px = cx_norm * src_width
-            cy_px = cy_norm * src_height
+
+            # Masked / Back-Facing Head Centroid Estimation for full-body persons
+            if label in PERSON_LABELS and label not in FACE_LABELS:
+                head_cx_norm = cx_norm
+                head_cy_norm = max(0.0, cy_norm - 0.30 * bh_norm)
+                if keypoints and len(keypoints) >= 7:
+                    valid_face = [kp for kp in keypoints[:3] if len(kp) >= 2 and (len(kp) < 3 or kp[2] >= 0.20)]
+                    if valid_face:
+                        head_cx_norm = sum(kp[0] for kp in valid_face) / len(valid_face)
+                        head_cy_norm = sum(kp[1] for kp in valid_face) / len(valid_face)
+                    else:
+                        valid_ears = [kp for kp in keypoints[3:5] if len(kp) >= 2 and (len(kp) < 3 or kp[2] >= 0.20)]
+                        if valid_ears:
+                            head_cx_norm = sum(kp[0] for kp in valid_ears) / len(valid_ears)
+                            head_cy_norm = sum(kp[1] for kp in valid_ears) / len(valid_ears)
+                        else:
+                            valid_shoulders = [kp for kp in keypoints[5:7] if len(kp) >= 2 and (len(kp) < 3 or kp[2] >= 0.20)]
+                            if valid_shoulders:
+                                head_cx_norm = sum(kp[0] for kp in valid_shoulders) / len(valid_shoulders)
+                                head_cy_norm = max(0.0, min(kp[1] for kp in valid_shoulders) - 0.12 * bh_norm)
+                target_focus_cx = head_cx_norm
+                target_focus_cy = head_cy_norm
+            else:
+                target_focus_cx = cx_norm
+                target_focus_cy = cy_norm
+
+            cx_px = target_focus_cx * src_width
+            cy_px = target_focus_cy * src_height
+            if abs(cx_px - round(cx_px)) < 1e-4:
+                cx_px = float(round(cx_px))
+            if abs(cy_px - round(cy_px)) < 1e-4:
+                cy_px = float(round(cy_px))
             frame_detections.setdefault(frame_idx, []).append({
                 "track_id": track_id,
                 "label": label,
                 "action_label": action_label,
                 "bbox": bbox,
-                "cx_norm": cx_norm,
-                "cy_norm": cy_norm,
+                "cx_norm": target_focus_cx,
+                "cy_norm": target_focus_cy,
                 "bw_norm": bw_norm,
                 "bh_norm": bh_norm,
                 "cx_px": cx_px,
@@ -245,6 +276,8 @@ def fuse_point_of_interest(spatial_events: List[Any],
                     first_verified_cx = d["cx_px"]
                     break
         if first_verified_cx is not None:
+            if abs(first_verified_cx - round(first_verified_cx)) < 1e-4:
+                first_verified_cx = float(round(first_verified_cx))
             break
 
     last_active_cx_px = first_verified_cx if first_verified_cx is not None else (src_width / 2.0)
@@ -281,7 +314,7 @@ def fuse_point_of_interest(spatial_events: List[Any],
             tid = d["track_id"]
 
             if label in FACE_LABELS or label in PERSON_LABELS:
-                if conf < 0.35:
+                if conf < 0.25:
                     continue
 
                 if tid <= 0:
@@ -414,7 +447,11 @@ def fuse_point_of_interest(spatial_events: List[Any],
             human_speakers = active_candidates or [cand for cand in other_candidates if cand[1] != ITEM_WEIGHT]
             if human_speakers:
                 spk_cx = human_speakers[0][0]
-                final_cx = tcx_px * 0.95 + spk_cx * 0.05
+                if cur_ft_type in ("held_object", "action_scene", "product", "product_showcase", "demonstration", "hands_on_action"):
+                    # Dual-Attractor: 50% topic object, 50% presenter face to keep both in frame
+                    final_cx = tcx_px * 0.50 + spk_cx * 0.50
+                else:
+                    final_cx = tcx_px * 0.95 + spk_cx * 0.05
             else:
                 final_cx = tcx_px
 
@@ -439,40 +476,73 @@ def fuse_point_of_interest(spatial_events: List[Any],
                 if d["label"] in ("monitor", "screen", "laptop", "tv", "display") and d["confidence"] >= 0.35
             ]
 
+            # Dual-Attractor: Detect physical held items / products in speaker's hands / interactive space
+            held_items = [
+                d for d in dets
+                if (d["label"] in ITEM_LABELS or d.get("action_label") == "held_product" or d["label"] in ("laptop", "screen", "monitor", "cell phone", "keyboard", "tablet"))
+                and (d.get("action_label") == "held_product" or abs(d["cx_px"] - last_active_cx_px) / src_width <= 0.30)
+            ]
+
+            cur_poi_y = src_height / 2.0
             if active_candidates:
                 # Active human detection exists: fuse active speakers (w=0.85) with discounted background humans (w*0.20)
                 all_human_candidates = [(cx, w) for cx, w, _ in active_candidates] + human_other
                 total_w = sum(w for _, w in all_human_candidates)
                 weighted_cx = sum(cx * w for cx, w in all_human_candidates) / total_w
-                last_active_cx_px = weighted_cx
-                poi_x[f] = weighted_cx
+                if held_items:
+                    best_held = max(held_items, key=lambda d: d.get("confidence", 0.0))
+                    obj_cx = best_held["cx_px"]
+                    obj_cy = best_held["cy_px"]
+                    dual_cx = weighted_cx * 0.65 + obj_cx * 0.35
+                    poi_x[f] = dual_cx
+                    cur_poi_y = min(src_height * 0.65, max(src_height * 0.35, obj_cy * 0.50 + (src_height * 0.35) * 0.50))
+                    last_active_cx_px = dual_cx
+                else:
+                    last_active_cx_px = weighted_cx
+                    poi_x[f] = weighted_cx
             elif screen_items and (not human_other or active_speaker_dropped_out):
-                # Cutaway or view shift to a monitor/screen (e.g. demonstrating Windows XP):
-                # Anchor directly on screen display center — never crop into a blank corner
+                # Cutaway or view shift to a monitor/screen:
                 best_screen = max(screen_items, key=lambda d: d.get("bw_norm", 0.0) * d.get("bh_norm", 0.0))
                 screen_cx = best_screen["cx_px"]
                 screen_cy = best_screen["cy_px"]
                 poi_x[f] = screen_cx
-                poi_y[f] = screen_cy
+                cur_poi_y = screen_cy
                 last_active_cx_px = screen_cx
             elif human_other and not active_speaker_dropped_out:
                 # Low gesture variance speaker present on screen
-                total_w = sum(w for _, w in human_other)
-                weighted_cx = sum(cx * w for cx, w in human_other) / total_w
-                last_active_cx_px = weighted_cx
-                poi_x[f] = weighted_cx
+                dominant_cx = sum(cx * w for cx, w in human_other) / sum(w for _, w in human_other)
+                if held_items:
+                    best_held = max(held_items, key=lambda d: d.get("confidence", 0.0))
+                    obj_cx = best_held["cx_px"]
+                    obj_cy = best_held["cy_px"]
+                    dual_cx = dominant_cx * 0.65 + obj_cx * 0.35
+                    poi_x[f] = dual_cx
+                    cur_poi_y = min(src_height * 0.65, max(src_height * 0.35, obj_cy * 0.50 + (src_height * 0.35) * 0.50))
+                    last_active_cx_px = dual_cx
+                else:
+                    last_active_cx_px = dominant_cx
+                    poi_x[f] = dominant_cx
             elif screen_items:
                 # Fallback to detected screen if available
                 best_screen = max(screen_items, key=lambda d: d.get("bw_norm", 0.0) * d.get("bh_norm", 0.0))
                 poi_x[f] = best_screen["cx_px"]
-                poi_y[f] = best_screen["cy_px"]
+                cur_poi_y = best_screen["cy_px"]
                 last_active_cx_px = best_screen["cx_px"]
             else:
                 # Elimination of Dead-Center cx=0.50 Fallback:
                 # Hold last verified active coordinate (cx_t = cx_{t-1})
+                if scene_changes:
+                    is_cut_frame = False
+                    for sc in scene_changes:
+                        sc_f = sc if isinstance(sc, int) else (sc.get("frame_idx", 0) if isinstance(sc, dict) else getattr(sc, "frame_idx", 0))
+                        if abs(f - sc_f) <= 2:
+                            is_cut_frame = True
+                            break
+                    if is_cut_frame:
+                        last_active_cx_px = src_width / 2.0
                 poi_x[f] = last_active_cx_px
 
-            poi_y[f] = src_height / 2.0
+            poi_y[f] = cur_poi_y
             crop_h[f] = src_height
             crop_w[f] = src_height * (9.0 / 16.0)
 
@@ -682,7 +752,8 @@ def solve_trajectory(spatial_events: List[Any],
                      crop_width: float = CROP_WIDTH_PX,
                      focal_targets: Optional[List[Any]] = None,
                      editorial_cuts: Optional[List[Any]] = None,
-                     return_4d: Optional[bool] = None) -> np.ndarray:
+                     return_4d: Optional[bool] = None,
+                     max_vel: float = MAX_VELOCITY_PX) -> np.ndarray:
     """Solves the complete 2D virtual camera trajectory using OSQP per-shot QP.
 
     Pipeline:
@@ -777,7 +848,8 @@ def solve_trajectory(spatial_events: List[Any],
         src_width=src_width,
         src_height=src_height,
         focal_targets=focal_targets,
-        return_2d=True
+        return_2d=True,
+        scene_changes=scene_changes
     )
 
     # Step 2: Identify shot boundaries
@@ -811,7 +883,7 @@ def solve_trajectory(spatial_events: List[Any],
                 shot_poi_x,
                 min_x=min_x,
                 max_x=max_x,
-                max_vel=MAX_VELOCITY_PX,
+                max_vel=max_vel,
                 lambda_v=LAMBDA_V,
                 lambda_a=LAMBDA_A,
                 post_clamp=True

@@ -925,8 +925,9 @@ def render_dual_pane_split_screen(frame: torch.Tensor,
     B, C, src_h, src_w = frame.shape
     device = frame.device
 
-    # Ensure genuine spatial separation between speaker and topic (avoid duplicate panes)
-    if abs(speaker_cx - topic_cx) < 0.30:
+    # Ensure genuine spatial separation between speaker and topic (avoid duplicate or body-fragment panes)
+    dx = abs(speaker_cx - topic_cx)
+    if dx < 0.35:
         from wsl2_gpu.render_spoke import render_smart_portrait_pan
         return render_smart_portrait_pan(frame, cx_norm=speaker_cx, target_w=target_w, target_h=target_h)
 

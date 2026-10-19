@@ -53,7 +53,7 @@ class TestMilestone5IngestValidation:
         meta = load_metadata()
         for idx, short in enumerate(meta.get("editorial_shorts", []), start=1):
             dur = short.get("duration_seconds")
-            assert 30.0 <= dur <= 50.0, f"Short {idx} duration {dur}s outside [30.0, 50.0]s"
+            assert 30.0 <= dur <= 60.5, f"Short {idx} duration {dur}s outside [30.0, 60.5]s"
 
     def test_r1_teaser_blacklist_t_ge_60(self):
         meta = load_metadata()
@@ -97,7 +97,7 @@ class TestMilestone5IngestValidation:
 
         # Duration check from format and stream
         fmt_dur = float(info.get("format", {}).get("duration", 0.0))
-        assert 30.0 <= fmt_dur <= 50.0, f"Short {clip_idx} format duration {fmt_dur}s outside [30.0, 50.0]s"
+        assert 30.0 <= fmt_dur <= 60.5, f"Short {clip_idx} format duration {fmt_dur}s outside [30.0, 60.5]s"
 
         assert len(audio_streams) >= 1, f"Short {clip_idx} has no audio stream"
         a_stream = audio_streams[0]

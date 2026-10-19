@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Aether — Autonomous AI Shorts Studio</title>
+  <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest" crossorigin="anonymous"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Outfit', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              neon: '#38bdf8',
+              emerald: '#10b981',
+              amber: '#f59e0b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #0b0f17;
+      color: #f1f5f9;
+      font-family: 'Outfit', sans-serif;
+    }
+    .glass-card {
+      background: rgba(17, 24, 39, 0.75);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-card-active {
+      background: rgba(17, 24, 39, 0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    .pulse-glow {
+      animation: pulseGlow 2s infinite ease-in-out;
+    }
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 0.6; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.05); }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col custom-scrollbar selection:bg-brand-500 selection:text-white">
+
+  <!-- Top Navigation Header -->
+  <header class="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-md">
+          <i data-lucide="sparkles" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+          <span class="text-xl font-extrabold tracking-tight text-white">Project Aether</span>
+          <span class="ml-2.5 text-xs font-semibold px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">AI Shorts Studio</span>
+        </div>
+      </div>
+
+      <!-- GPU Telemetry, Mode Toggle & System Status -->
+      <div class="flex items-center space-x-3">
+        <!-- Operating Mode Switcher -->
+        <button id="modeToggleBtn" onclick="toggleOperatingMode()" title="Toggle between Human Review Queue and 24/7 Autonomous Auto-Pilot" class="flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer bg-purple-500/10 text-purple-400 border-purple-500/30 hover:bg-purple-500/20">
+          <i data-lucide="sliders" class="w-3.5 h-3.5"></i>
+          <span id="modeLabel">REVIEW FIRST</span>
+        </button>
+
+        <!-- YouTube Quota Badge -->
+        <div id="quotaBadge" class="hidden lg:flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
+          <i data-lucide="youtube" class="w-4 h-4 text-red-500"></i>
+          <span class="text-slate-400">Quota:</span>
+          <span id="quotaDisplay" class="font-mono font-medium text-slate-200">0 / 10,000</span>
+        </div>
+
+        <!-- VRAM Chip -->
+        <div id="gpuTelemetry" class="hidden sm:flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
+          <i data-lucide="cpu" class="w-4 h-4 text-emerald-400"></i>
+          <span class="text-slate-400">RTX 5080:</span>
+          <span id="vramUsage" class="font-mono font-medium text-emerald-400">3.6 / 16.3 GB</span>
+          <span class="text-slate-500">|</span>
+          <span id="gpuTemp" class="font-mono text-slate-400">53°C</span>
+        </div>
+
+        <!-- Pipeline Status Badge -->
+        <div id="pipelineStatusBadge" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+          <span id="pipelineStatusText">SYSTEM READY</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- Hero Introduction -->
+    <section class="glass-card rounded-2xl p-8 border border-slate-800">
+      <div class="max-w-3xl">
+        <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2.5">Autonomous YouTube Shorts Content Studio</h1>
+        <p class="text-base text-slate-400 leading-relaxed">
+          Transform arbitrary 4K long-form video or trending internet topics into mathematically synchronized 9:16 vertical shorts with deterministic A/V sync, kinetic subtitles, and autonomous algorithmic scheduling.
+        </p>
+      </div>
+    </section>
+
+    <!-- Section 1: Ingest Launchpad (Input Video Selector & One-Click Trigger) -->
+    <section class="glass-card rounded-2xl p-6 relative">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+            <i data-lucide="video" class="w-6 h-6 text-blue-400"></i>
+            Source Video Ingest
+          </h2>
+          <p class="text-sm text-slate-400 mt-1">Select an input video from <code class="text-xs bg-slate-900 px-2 py-1 rounded text-slate-300 font-mono">data/input_videos/</code> to generate synchronized 9:16 viral shorts.</p>
+        </div>
+
+        <button id="refreshVideosBtn" class="self-start md:self-auto flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span>Refresh Files</span>
+        </button>
+      </div>
+
+      <!-- Videos Selection Grid -->
+      <div id="videosGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        <!-- Injected via JS -->
+        <div class="animate-pulse bg-slate-800/50 rounded-xl h-24 border border-slate-700/50"></div>
+      </div>
+
+      <!-- Launch Action Bar -->
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-800/80">
+        <div class="text-sm text-slate-400 flex items-center gap-2">
+          <i data-lucide="sparkles" class="w-4 h-4 text-cyan-400"></i>
+          <span>Selected Video: <strong id="selectedVideoLabel" class="text-white font-mono">Brand new day.mkv</strong></span>
+        </div>
+
+        <button id="generateBtn" class="w-full sm:w-auto flex items-center justify-center space-x-2.5 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm shadow-md transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+          <i data-lucide="zap" class="w-4 h-4 text-yellow-300 fill-yellow-300"></i>
+          <span>⚡ Generate Viral Shorts</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Section 2: Real-Time Pipeline Progress & Dual Timers -->
+    <section id="pipelineSection" class="glass-card rounded-2xl p-6 relative">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+            <i data-lucide="timer" class="w-6 h-6 text-yellow-400"></i>
+            Live Pipeline Timers & Stage Progress
+          </h2>
+          <p class="text-sm text-slate-400 mt-1">Real-time telemetry tracked across subprocess-isolated CUDA phases.</p>
+        </div>
+
+        <!-- Dynamic Stage Badge -->
+        <div id="activeStagePill" class="self-start md:self-auto px-3.5 py-1.5 rounded-full text-xs font-semibold font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
+          STAGE: IDLE
+        </div>
+      </div>
+
+      <!-- Dual Timers Widget -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <!-- Timer 1: Elapsed Stopwatch -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span class="tracking-wider uppercase font-semibold">ELAPSED TIME</span>
+            <i data-lucide="clock" class="w-3.5 h-3.5 text-blue-400"></i>
+          </div>
+          <div id="timerElapsed" class="text-4xl font-extrabold font-mono text-white tracking-tight">00:00:00</div>
+          <div class="text-[11px] text-slate-500 mt-1">Running stopwatch</div>
+        </div>
+
+        <!-- Timer 2: Countdown to Ready -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span class="tracking-wider uppercase font-semibold">COUNTDOWN TO COMPLETION</span>
+            <i data-lucide="hourglass" class="w-3.5 h-3.5 text-amber-400"></i>
+          </div>
+          <div id="timerCountdown" class="text-4xl font-extrabold font-mono text-amber-400 tracking-tight">--:--</div>
+          <div id="countdownSub" class="text-[11px] text-slate-500 mt-1">Estimated time remaining</div>
+        </div>
+
+        <!-- Telemetry 3: Active Clip Render Status -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span class="tracking-wider uppercase font-semibold">CLIPS PROCESSED</span>
+            <i data-lucide="film" class="w-3.5 h-3.5 text-emerald-400"></i>
+          </div>
+          <div id="clipsCountDisplay" class="text-4xl font-extrabold font-mono text-emerald-400 tracking-tight">4 / 4</div>
+          <div class="text-[11px] text-slate-500 mt-1">Viral shorts rendered</div>
+        </div>
+
+        <!-- Telemetry 4: Video Sync Precision -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span class="tracking-wider uppercase font-semibold">A/V SYNC DELTA</span>
+            <i data-lucide="activity" class="w-3.5 h-3.5 text-cyan-400"></i>
+          </div>
+          <div class="text-4xl font-extrabold font-mono text-cyan-400 tracking-tight">&lt; 0.33 ms</div>
+          <div class="text-[11px] text-slate-500 mt-1">Deterministic -r 30 sync</div>
+        </div>
+      </div>
+
+      <!-- 3-Phase Stepper Tracker -->
+      <div class="space-y-3">
+        <div class="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
+          <span>PIPELINE EXECUTION STAGES</span>
+          <span id="pipelinePercent" class="font-mono text-blue-400">100% COMPLETE</span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <!-- Phase 1 Card -->
+          <div id="phaseCard1" class="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 transition-all">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-mono">1</span>
+                Phase 1: Whisper ASR
+              </span>
+              <span id="phase1Badge" class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400">DONE</span>
+            </div>
+            <p class="text-[11px] text-slate-400">Faster-Whisper on CUDA • Exact word timestamps & language detection</p>
+          </div>
+
+          <!-- Phase 2 Card -->
+          <div id="phaseCard2" class="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 transition-all">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center text-[10px] font-mono">2</span>
+                Phase 2: Vision & Editorial
+              </span>
+              <span id="phase2Badge" class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400">DONE</span>
+            </div>
+            <p class="text-[11px] text-slate-400">Kornia Scene Detection • YOLO-Pose • VLM Narrative Viral Arcs</p>
+          </div>
+
+          <!-- Phase 3 Card -->
+          <div id="phaseCard3" class="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 transition-all">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <span class="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[10px] font-mono">3</span>
+                Phase 3: Render & Subtitles
+              </span>
+              <span id="phase3Badge" class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400">DONE</span>
+            </div>
+            <p class="text-[11px] text-slate-400">OSQP Trajectory Solver • Kinetic Subtitle Atlas • 9:16 Portrait Compositor</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: Human Review & Publication Queue -->
+    <section class="glass-card rounded-2xl p-6">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+            <i data-lucide="check-check" class="w-6 h-6 text-purple-400"></i>
+            Review Queue & Algorithmic Drops
+          </h2>
+          <p class="text-sm text-slate-400 mt-1">Certified 9:16 shorts awaiting 1-click human verification before scheduled YouTube release.</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
+            <i data-lucide="clock" class="w-3.5 h-3.5 text-amber-400"></i>
+            <span>Peak Drops: 11:30 AM • 4:30 PM • 8:30 PM</span>
+          </span>
+          <button id="refreshQueueBtn" onclick="fetchReviewQueue()" class="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>Refresh Queue</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Review Queue Items Grid -->
+      <div id="reviewQueueGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <!-- Injected via JS -->
+      </div>
+    </section>
+
+    <!-- Section: Real-Time Trending Radar -->
+    <section class="glass-card rounded-2xl p-6">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+        <div>
+          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+            <i data-lucide="trending-up" class="w-6 h-6 text-pink-400"></i>
+            Trending Radar (Google Trends & Viral Signals)
+          </h2>
+          <p class="text-sm text-slate-400 mt-1">High-velocity viral topics vetted for safety and Creative Commons licensing.</p>
+        </div>
+
+        <button onclick="fetchTrends()" class="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span>Scan Trends</span>
+        </button>
+      </div>
+
+      <!-- Trends Pills -->
+      <div id="trendsContainer" class="flex flex-wrap gap-2.5">
+        <!-- Injected via JS -->
+      </div>
+    </section>
+
+    <!-- Section 3: Browsable Shorts Showcase Gallery -->
+    <section class="glass-card rounded-2xl p-6">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+            <i data-lucide="clapperboard" class="w-6 h-6 text-emerald-400"></i>
+            Rendered Shorts Gallery
+          </h2>
+          <p class="text-sm text-slate-400 mt-1">Browse, stream in 9:16 vertical player, inspect metadata, and download finished shorts.</p>
+        </div>
+
+        <button id="refreshShortsBtn" class="self-start sm:self-auto flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span>Reload Shorts</span>
+        </button>
+      </div>
+
+      <!-- Shorts Grid -->
+      <div id="shortsGallery" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Injected via JS -->
+      </div>
+    </section>
+
+    <!-- Section 4: Live Log Console Drawer -->
+    <section class="glass-card rounded-2xl p-5">
+      <div class="flex items-center justify-between cursor-pointer" onclick="toggleLogs()">
+        <div class="flex items-center space-x-2 text-xs font-semibold text-slate-300">
+          <i data-lucide="terminal" class="w-4 h-4 text-cyan-400"></i>
+          <span>Live Pipeline Event Log</span>
+        </div>
+        <i id="logChevron" data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transition-transform"></i>
+      </div>
+      <div id="logContainer" class="mt-4 bg-slate-950 rounded-xl p-3 border border-slate-800/80 font-mono text-xs text-slate-400 h-44 overflow-y-auto custom-scrollbar space-y-1">
+        <div class="text-slate-500">[System] Initializing Project Aether Studio Dashboard...</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Video Player Modal -->
+  <div id="videoModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl relative flex flex-col items-center p-4">
+      <button onclick="closeVideoModal()" class="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-slate-800/80 hover:bg-slate-700 flex items-center justify-center text-slate-300 hover:text-white transition">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+
+      <h3 id="modalVideoTitle" class="text-sm font-semibold text-white mb-3 pr-10 text-center truncate w-full">Short Playback</h3>
+
+      <div class="w-[270px] h-[480px] bg-black rounded-xl overflow-hidden shadow-inner flex items-center justify-center relative">
+        <video id="modalVideoPlayer" controls autoplay loop playsinline class="w-full h-full object-contain">
+          <source src="" type="video/mp4">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+
+      <div class="mt-4 flex items-center justify-between w-full px-2 text-xs text-slate-400">
+        <span id="modalVideoMeta">1080x1920 • 9:16 Vertical</span>
+        <a id="modalDownloadBtn" href="#" download class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition">
+          <i data-lucide="download" class="w-3.5 h-3.5"></i>
+          <span>Download</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Logic -->
+  <script>
+    let selectedVideo = "Brand new day.mkv";
+    let statusInterval = null;
+    let timerTickInterval = null;
+    let pipelineStartTime = null;
+    let estimatedTotalSeconds = 270.0;
+    let currentPipelineStatus = "idle";
+
+    document.addEventListener("DOMContentLoaded", () => {
+      lucide.createIcons();
+      fetchVideos();
+      fetchShorts();
+      fetchOperatingMode();
+      fetchQuota();
+      fetchReviewQueue();
+      fetchTrends();
+      startPolling();
+
+      document.getElementById("generateBtn").addEventListener("click", triggerPipeline);
+      document.getElementById("refreshVideosBtn").addEventListener("click", fetchVideos);
+      document.getElementById("refreshShortsBtn").addEventListener("click", fetchShorts);
+    });
+
+    // ── Fetch Videos ──
+    async function fetchVideos() {
+      try {
+        const res = await fetch("/api/videos");
+        const data = await res.json();
+        const grid = document.getElementById("videosGrid");
+        grid.innerHTML = "";
+
+        if (!data.videos || data.videos.length === 0) {
+          grid.innerHTML = `<div class="col-span-full p-4 text-center text-slate-500 text-sm">No video files found in data/input_videos.</div>`;
+          return;
+        }
+
+        data.videos.forEach(v => {
+          const isSelected = v.filename === selectedVideo;
+          const card = document.createElement("div");
+          card.className = `cursor-pointer p-4 rounded-xl border transition-all ${
+            isSelected
+              ? "glass-card-active border-blue-500/60"
+              : "glass-card hover:border-slate-700"
+          }`;
+          card.onclick = () => selectVideo(v.filename);
+          card.innerHTML = `
+            <div class="flex items-start justify-between">
+              <div class="flex items-center space-x-2.5">
+                <i data-lucide="file-video" class="w-5 h-5 ${isSelected ? 'text-blue-400' : 'text-slate-400'}"></i>
+                <div>
+                  <h4 class="text-sm font-semibold text-white truncate max-w-[180px]">${v.filename}</h4>
+                  <div class="text-[11px] text-slate-400 mt-0.5">${v.width}x${v.height} • ${v.codec.toUpperCase()}</div>
+                </div>
+              </div>
+              <span class="text-xs font-mono font-medium text-slate-300 bg-slate-800/80 px-2.5 py-1 rounded">${v.size_mb} MB</span>
+            </div>
+            <div class="mt-3 flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/60">
+              <span>Duration: <strong class="text-slate-300 font-mono">${v.duration_formatted}</strong></span>
+              <span class="text-[10px] text-blue-400 font-medium">${isSelected ? '● SELECTED' : 'Click to select'}</span>
+            </div>
+          `;
+          grid.appendChild(card);
+        });
+        lucide.createIcons();
+      } catch (err) {
+        console.error("Failed to load videos:", err);
+      }
+    }
+
+    function selectVideo(filename) {
+      selectedVideo = filename;
+      document.getElementById("selectedVideoLabel").textContent = filename;
+      fetchVideos();
+    }
+
+    // ── Fetch Rendered Shorts ──
+    async function fetchShorts() {
+      try {
+        const res = await fetch("/api/shorts");
+        const data = await res.json();
+        const gallery = document.getElementById("shortsGallery");
+        gallery.innerHTML = "";
+
+        if (!data.shorts || data.shorts.length === 0) {
+          gallery.innerHTML = `<div class="col-span-full py-12 text-center text-slate-500 text-sm">No shorts rendered yet. Launch the pipeline to generate shorts.</div>`;
+          return;
+        }
+
+        document.getElementById("clipsCountDisplay").textContent = `${data.shorts.length} / 4`;
+
+        data.shorts.forEach(s => {
+          const card = document.createElement("div");
+          card.className = "glass-card rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500/40 transition group flex flex-col";
+
+          const thumbSrc = s.thumbnail_url || "";
+          card.innerHTML = `
+            <div class="relative w-full aspect-[9/16] bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center" onclick="openVideoModal('${s.video_url}', '${s.title.replace(/'/g, "\\'")}', '${s.duration_seconds}')">
+              ${thumbSrc ? `<img src="${thumbSrc}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">` : `<i data-lucide="play-circle" class="w-12 h-12 text-slate-600"></i>`}
+              <div class="absolute inset-0 bg-black/40 group-hover:bg-black/20 flex items-center justify-center transition">
+                <div class="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center shadow-lg transform group-hover:scale-110 transition">
+                  <i data-lucide="play" class="w-5 h-5 fill-current ml-0.5"></i>
+                </div>
+              </div>
+              <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[11px] font-mono text-white bg-slate-950/80 px-2 py-1 rounded backdrop-blur">
+                <span>⏱ ${s.duration_seconds}s</span>
+                <span class="text-emerald-400 font-bold">Δ ${s.sync_delta_ms}ms</span>
+              </div>
+            </div>
+
+            <div class="p-4 flex-1 flex flex-col justify-between">
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span class="font-bold text-blue-400">Short ${s.clip_index}</span>
+                  <span class="font-mono text-slate-400 text-[11px]">${s.size_mb} MB</span>
+                </div>
+                <h4 class="text-sm font-semibold text-white line-clamp-2 title-hover">${s.title}</h4>
+              </div>
+
+              <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                <div class="text-[11px] text-slate-400 font-mono">1080x1920 (9:16)</div>
+                <a href="${s.video_url}" download class="text-xs flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition">
+                  <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                  <span>MP4</span>
+                </a>
+              </div>
+            </div>
+          `;
+          gallery.appendChild(card);
+        });
+        lucide.createIcons();
+      } catch (err) {
+        console.error("Failed to load shorts:", err);
+      }
+    }
+
+    // ── Polling & Real-Time Status ──
+    function startPolling() {
+      if (statusInterval) clearInterval(statusInterval);
+      pollStatus();
+      statusInterval = setInterval(pollStatus, 2500);
+
+      if (timerTickInterval) clearInterval(timerTickInterval);
+      timerTickInterval = setInterval(updateLocalTimers, 1000);
+    }
+
+    async function pollStatus() {
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+
+        currentPipelineStatus = data.status;
+        if (data.pipeline_start_time) {
+          pipelineStartTime = data.pipeline_start_time;
+        }
+
+        // Update GPU chip
+        if (data.gpu) {
+          document.getElementById("vramUsage").textContent = `${(data.gpu.used_mb / 1024).toFixed(1)} / ${(data.gpu.total_mb / 1024).toFixed(1)} GB`;
+          document.getElementById("gpuTemp").textContent = `${data.gpu.temp_c}°C`;
+        }
+
+        // Update status badge
+        const badge = document.getElementById("pipelineStatusBadge");
+        const statusText = document.getElementById("pipelineStatusText");
+        const stagePill = document.getElementById("activeStagePill");
+
+        if (data.status === "processing") {
+          badge.className = "flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
+          statusText.textContent = "PIPELINE ACTIVE";
+          stagePill.textContent = `STAGE: ${data.current_stage.toUpperCase()}`;
+          stagePill.className = "self-start md:self-auto px-3 py-1 rounded-full text-xs font-semibold font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse";
+          document.getElementById("generateBtn").disabled = true;
+        } else {
+          badge.className = "flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+          statusText.textContent = "SYSTEM READY";
+          stagePill.textContent = "STAGE: COMPLETED / IDLE";
+          stagePill.className = "self-start md:self-auto px-3 py-1 rounded-full text-xs font-semibold font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+          document.getElementById("generateBtn").disabled = false;
+        }
+
+        // Update stage cards
+        updateStageCards(data.current_stage, data.status);
+
+        // Update logs
+        if (data.recent_logs && data.recent_logs.length > 0) {
+          const logBox = document.getElementById("logContainer");
+          logBox.innerHTML = "";
+          data.recent_logs.forEach(l => {
+            const row = document.createElement("div");
+            row.innerHTML = `<span class="text-slate-500">[${l.time}]</span> <span class="text-blue-400">${l.level}:</span> <span class="text-slate-300">${l.message}</span>`;
+            logBox.appendChild(row);
+          });
+        }
+      } catch (err) {
+        console.warn("Status poll blip:", err);
+      }
+    }
+
+    function updateLocalTimers() {
+      if (currentPipelineStatus === "processing" && pipelineStartTime) {
+        const now = Date.now() / 1000;
+        const elapsed = Math.max(0, now - pipelineStartTime);
+        const rem = Math.max(0, estimatedTotalSeconds - elapsed);
+
+        document.getElementById("timerElapsed").textContent = formatTime(elapsed);
+        document.getElementById("timerCountdown").textContent = formatTime(rem);
+        document.getElementById("countdownSub").textContent = `ETA countdown (${Math.round(rem)}s remaining)`;
+      } else if (currentPipelineStatus !== "processing") {
+        document.getElementById("timerCountdown").textContent = "00:00";
+        document.getElementById("countdownSub").textContent = "Pipeline idle or finished";
+      }
+    }
+
+    function formatTime(totalSec) {
+      const m = Math.floor(totalSec / 60);
+      const s = Math.floor(totalSec % 60);
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function updateStageCards(stage, status) {
+      const c1 = document.getElementById("phaseCard1");
+      const c2 = document.getElementById("phaseCard2");
+      const c3 = document.getElementById("phaseCard3");
+      const b1 = document.getElementById("phase1Badge");
+      const b2 = document.getElementById("phase2Badge");
+      const b3 = document.getElementById("phase3Badge");
+
+      if (status !== "processing") {
+        b1.textContent = "DONE"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
+        b2.textContent = "DONE"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
+        b3.textContent = "DONE"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
+        return;
+      }
+
+      if (stage === "phase1_asr") {
+        b1.textContent = "RUNNING"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-amber-500/10 text-amber-400 animate-pulse";
+        b2.textContent = "QUEUED"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-slate-800 text-slate-500";
+        b3.textContent = "QUEUED"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-slate-800 text-slate-500";
+      } else if (stage === "phase2_vlm_editorial") {
+        b1.textContent = "DONE"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
+        b2.textContent = "RUNNING"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-purple-500/10 text-purple-400 animate-pulse";
+        b3.textContent = "QUEUED"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-slate-800 text-slate-500";
+      } else if (stage === "phase3_render") {
+        b1.textContent = "DONE"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
+        b2.textContent = "DONE"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
+        b3.textContent = "RENDERING"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-cyan-500/10 text-cyan-400 animate-pulse";
+      }
+    }
+
+    // ── Trigger Ingest ──
+    async function triggerPipeline() {
+      if (!selectedVideo) {
+        alert("Please select a video first!");
+        return;
+      }
+      try {
+        const btn = document.getElementById("generateBtn");
+        btn.disabled = true;
+        btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Starting Pipeline...</span>`;
+        lucide.createIcons();
+
+        const res = await fetch("/api/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: jsonStringifySafe({ video_name: selectedVideo })
+        });
+        const data = await res.json();
+
+        if (data.status === "success") {
+          currentPipelineStatus = "processing";
+          pipelineStartTime = Date.now() / 1000;
+          estimatedTotalSeconds = data.estimated_time_seconds || 270.0;
+          pollStatus();
+        } else {
+          alert(`Pipeline trigger error: ${data.error}`);
+          btn.disabled = false;
+        }
+      } catch (err) {
+        alert(`Failed to trigger pipeline: ${err}`);
+      }
+    }
+
+    function jsonStringifySafe(obj) {
+      return JSON.stringify(obj);
+    }
+
+    // ── Video Modal ──
+    function openVideoModal(url, title, dur) {
+      const modal = document.getElementById("videoModal");
+      const player = document.getElementById("modalVideoPlayer");
+      const titleEl = document.getElementById("modalVideoTitle");
+      const dlBtn = document.getElementById("modalDownloadBtn");
+
+      titleEl.textContent = title;
+      player.src = url;
+      dlBtn.href = url;
+      modal.classList.remove("hidden");
+      player.play().catch(() => {});
+    }
+
+    function closeVideoModal() {
+      const modal = document.getElementById("videoModal");
+      const player = document.getElementById("modalVideoPlayer");
+      player.pause();
+      player.src = "";
+      modal.classList.add("hidden");
+    }
+
+    function toggleLogs() {
+      const box = document.getElementById("logContainer");
+      const chevron = document.getElementById("logChevron");
+      box.classList.toggle("hidden");
+      chevron.classList.toggle("rotate-180");
+    }
+
+    // ── Operating Mode Switcher ──
+    let currentMode = "review_first";
+
+    async function fetchOperatingMode() {
+      try {
+        const res = await fetch("/api/mode");
+        const data = await res.json();
+        currentMode = data.mode || "review_first";
+        updateModeUI();
+      } catch (err) {
+        console.warn("Could not fetch mode:", err);
+      }
+    }
+
+    async function toggleOperatingMode() {
+      const nextMode = (currentMode === "auto_pilot") ? "review_first" : "auto_pilot";
+      try {
+        const res = await fetch("/api/mode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: nextMode })
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          currentMode = data.mode;
+          updateModeUI();
+        }
+      } catch (err) {
+        console.error("Failed to toggle mode:", err);
+      }
+    }
+
+    function updateModeUI() {
+      const btn = document.getElementById("modeToggleBtn");
+      const label = document.getElementById("modeLabel");
+      if (!btn || !label) return;
+      if (currentMode === "auto_pilot") {
+        label.textContent = "AUTO-PILOT 24/7";
+        btn.className = "flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20";
+      } else {
+        label.textContent = "REVIEW FIRST";
+        btn.className = "flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer bg-purple-500/10 text-purple-400 border-purple-500/30 hover:bg-purple-500/20";
+      }
+    }
+
+    // ── YouTube Quota Meter ──
+    async function fetchQuota() {
+      try {
+        const res = await fetch("/api/quota");
+        const data = await res.json();
+        const display = document.getElementById("quotaDisplay");
+        if (display && data.daily_budget) {
+          display.textContent = `${data.units_used.toLocaleString()} / ${data.daily_budget.toLocaleString()}`;
+        }
+      } catch (err) {
+        console.warn("Could not fetch quota:", err);
+      }
+    }
+
+    // ── Review Queue ──
+    async function fetchReviewQueue() {
+      try {
+        const res = await fetch("/api/review_queue");
+        const data = await res.json();
+        const container = document.getElementById("reviewQueueGrid");
+        if (!container) return;
+        container.innerHTML = "";
+
+        if (!data.queue || data.queue.length === 0) {
+          container.innerHTML = `<div class="col-span-full p-6 text-center text-slate-500 text-sm bg-slate-900/40 rounded-xl border border-slate-800/60">
+            <i data-lucide="inbox" class="w-8 h-8 mx-auto text-slate-600 mb-2"></i>
+            <span>All certified shorts have been scheduled or published. Review queue is clear.</span>
+          </div>`;
+          lucide.createIcons();
+          return;
+        }
+
+        data.queue.forEach(item => {
+          const card = document.createElement("div");
+          card.className = "p-4 rounded-xl border border-purple-500/30 bg-purple-950/10 hover:border-purple-500/60 transition flex flex-col justify-between";
+          card.innerHTML = `
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold text-white flex items-center gap-1.5">
+                  <i data-lucide="award" class="w-4 h-4 text-emerald-400"></i>
+                  ${item.title || "Certified Short"}
+                </span>
+                <span class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">QA PASSED</span>
+              </div>
+              <p class="text-xs text-slate-400 mb-3 truncate font-mono">${item.filename || ""}</p>
+            </div>
+            <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              <span class="text-[11px] text-amber-400 flex items-center gap-1">
+                <i data-lucide="clock" class="w-3 h-3"></i>
+                <span>Drop: 11:30 AM</span>
+              </span>
+              <button onclick="publishFromQueue('${item.video_path.replace(/\\/g, "/")}', '${(item.title || "Short").replace(/'/g, "\\'")}', '${(item.thumbnail_path || "").replace(/\\/g, "/")}')" class="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer">
+                <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                <span>Approve & Publish</span>
+              </button>
+            </div>
+          `;
+          container.appendChild(card);
+        });
+        lucide.createIcons();
+      } catch (err) {
+        console.warn("Could not fetch review queue:", err);
+      }
+    }
+
+    async function publishFromQueue(vidPath, title, thumbPath) {
+      if (!confirm(`Confirm approval & YouTube publication for: "${title}"?`)) return;
+      try {
+        const res = await fetch("/api/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_path: vidPath,
+            title: title,
+            thumbnail_path: thumbPath
+          })
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          alert(`🎉 Successfully scheduled YouTube publication for "${title}" at ${data.scheduled_time}! (Mode: ${data.mode})`);
+          fetchReviewQueue();
+          fetchQuota();
+          fetchShorts();
+        } else {
+          alert(`Publishing response: ${data.message || data.error || JSON.stringify(data)}`);
+        }
+      } catch (err) {
+        alert(`Error publishing short: ${err}`);
+      }
+    }
+
+    // ── Trending Radar ──
+    async function fetchTrends() {
+      try {
+        const res = await fetch("/api/trends");
+        const data = await res.json();
+        const container = document.getElementById("trendsContainer");
+        if (!container) return;
+        container.innerHTML = "";
+
+        if (!data.topics || data.topics.length === 0) {
+          container.innerHTML = `<span class="text-xs text-slate-500">Scan Google Trends to discover rising high-velocity queries.</span>`;
+          return;
+        }
+
+        data.topics.forEach(t => {
+          const pill = document.createElement("div");
+          pill.className = "flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 hover:border-pink-500/40 transition cursor-default";
+          pill.innerHTML = `
+            <span class="w-2 h-2 rounded-full bg-pink-400"></span>
+            <span class="font-medium">${t.title}</span>
+            <span class="text-[10px] font-mono text-pink-400 bg-pink-500/10 px-2.5 py-1 rounded">${t.approx_traffic}</span>
+          `;
+          container.appendChild(pill);
+        });
+      } catch (err) {
+        console.warn("Could not fetch trends:", err);
+      }
+    }
+  </script>
+</body>
+</html>

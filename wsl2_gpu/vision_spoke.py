@@ -143,9 +143,9 @@ def generate_synthetic_demonstration_roi(
         timestamp=person_event.timestamp,
         frame_idx=person_event.frame_idx,
         track_id=200 + person_event.track_id,
-        label="demonstration_action",
+        label="synthetic_wrist_roi",
         bbox=synth_bbox,
-        confidence=0.75,
+        confidence=0.50,
         keypoints=[],
         action_label="held_product"
     )
@@ -191,21 +191,24 @@ class VisionSpoke:
             logger.error(f"Failed to load YOLO11s-Pose model: {e}")
             self.yolo_pose_model = "mock"
 
-        # Load Object Detector for Non-Human Items (YOLOE-26 / YOLOv8s)
-        yoloe_path = "./data/models/yoloe26s.pt"
+        # Load Object Detector for Non-Human Items (YOLO11s / YOLOv8s)
         logger.info("Loading YOLO object detector model...")
         t0 = time.perf_counter()
         try:
             from ultralytics import YOLO
-            if os.path.exists(yoloe_path):
-                self.yoloe_model = YOLO(yoloe_path)
+            if os.path.exists("./data/models/yolo11s.pt"):
+                self.yoloe_model = YOLO("./data/models/yolo11s.pt")
+            elif os.path.exists("yolo11s.pt"):
+                self.yoloe_model = YOLO("yolo11s.pt")
+            elif os.path.exists("./data/models/yoloe26s.pt"):
+                self.yoloe_model = YOLO("./data/models/yoloe26s.pt")
             elif os.path.exists("./data/models/yolov8s.pt"):
                 self.yoloe_model = YOLO("./data/models/yolov8s.pt")
             elif os.path.exists("yolov8s.pt"):
                 self.yoloe_model = YOLO("yolov8s.pt")
             else:
                 try:
-                    self.yoloe_model = YOLO("yolov8s.pt")
+                    self.yoloe_model = YOLO("yolo11s.pt")
                 except Exception:
                     self.yoloe_model = None
 
@@ -360,11 +363,14 @@ class VisionSpoke:
             return spatial_events
 
         try:
-            sample_fps = 1.0 / POSE_SAMPLE_INTERVAL
+            effective_interval = 1.0 if duration > 3600.0 else POSE_SAMPLE_INTERVAL
+            sample_fps = 1.0 / effective_interval
+            frame_w, frame_h = 960, 540
+            frame_size = frame_w * frame_h * 3
             extract_cmd = [
                 "ffmpeg", "-y",
                 "-i", source_path,
-                "-vf", f"fps={sample_fps},scale=640:360",
+                "-vf", f"fps={sample_fps},scale={frame_w}:{frame_h}",
                 "-f", "rawvideo", "-pix_fmt", "rgb24",
                 "pipe:1"
             ]
@@ -373,13 +379,11 @@ class VisionSpoke:
                 extract_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                bufsize=640 * 360 * 3 * 4
+                bufsize=frame_size * 4
             )
 
-            frame_w, frame_h = 640, 360
-            frame_size = frame_w * frame_h * 3
             frame_idx = 0
-            
+
             import numpy as np
             import torch
             import kornia
@@ -389,7 +393,7 @@ class VisionSpoke:
                 if len(raw) < frame_size:
                     break
 
-                timestamp = frame_idx * POSE_SAMPLE_INTERVAL
+                timestamp = frame_idx * effective_interval
                 frame_np = np.frombuffer(raw, dtype=np.uint8).reshape(frame_h, frame_w, 3)
 
                 detected = False

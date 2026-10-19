@@ -50,3 +50,11 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Authentication & Credentials (Strictly protected from Git leaks)
+data/auth/
+*.token.json
+client_secrets*.json
+youtube_token*.json
+credentials.json
+token.json

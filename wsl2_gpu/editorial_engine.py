@@ -239,17 +239,30 @@ def classify_video_profile(transcript_words: List[Any],
     screen_ratio = screen_count / float(total_spatial)
     animal_ratio = animal_count / float(total_spatial)
 
-    # 3. Decision priority
-    if animal_ratio >= 0.20 or wildlife_hits >= 4:
+    # 3. Decision priority (normalized by corpus scale and scene dynamics)
+    total_words = max(1, len(transcript_words))
+    tech_density = tech_hits / float(total_words)
+    comedy_density = comedy_hits / float(total_words)
+    game_density = game_hits / float(total_words)
+    wildlife_density = wildlife_hits / float(total_words)
+
+    # Narrative film format heuristic: multi-scene long-form work with high shot cut frequency
+    scene_density = len(scene_changes) / max(1.0, float(video_duration))
+    is_cinematic_format = (video_duration >= 600.0 and scene_density >= 0.05)
+
+    if animal_ratio >= 0.20 or (wildlife_hits >= 4 and wildlife_density >= 0.01):
         return UniversalContentProfile.WILDLIFE_NATURE
 
-    if screen_ratio >= 0.08 or tech_hits >= 3:
+    if is_cinematic_format and screen_ratio < 0.08:
+        return UniversalContentProfile.CINEMATIC_NARRATIVE
+
+    if screen_ratio >= 0.08 or (tech_hits >= 3 and (tech_density >= 0.005 or total_words < 500)):
         return UniversalContentProfile.TECH_REVIEW_DEMO
 
-    if game_hits >= 4:
+    if game_hits >= 4 and (game_density >= 0.008 or total_words < 500):
         return UniversalContentProfile.GAMEPLAY_STREAM
 
-    if comedy_hits >= 3:
+    if comedy_hits >= 3 and (comedy_density >= 0.006 or total_words < 500):
         return UniversalContentProfile.STAGE_PERFORMANCE
 
     # Check speaker count
@@ -1319,8 +1332,16 @@ class EditorialEngine:
         # Step 1: Build shot boundaries
         shots = self.build_shot_boundaries(scene_changes, video_duration, fps)
 
+        # Candidate shots for keyframe extraction: if hundreds of shots (e.g. movies), subsample candidates first
+        candidate_shots = shots
+        if len(shots) > 32:
+            body_shots = [s for s in shots if s.start_s >= MIN_START_TIME and s.duration >= 1.5]
+            pool = body_shots if len(body_shots) >= 16 else shots
+            step = len(pool) / 16.0
+            candidate_shots = [pool[int(i * step)] for i in range(16)]
+
         # Step 2: Extract midpoint keyframes
-        keyframes = self.extract_midpoint_keyframes(video_path, shots)
+        keyframes = self.extract_midpoint_keyframes(video_path, candidate_shots)
 
         valid_shorts: List[ShortCandidate] = []
 

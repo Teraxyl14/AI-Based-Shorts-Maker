@@ -205,7 +205,7 @@ class TestTier4RealWorldWorkloads:
                     c_info = probe_video_stream(clip_path)
                     assert c_info["width"] == 1080
                     assert c_info["height"] == 1920
-                    assert 30.0 <= c_info["duration"] <= 50.0
+                    assert 30.0 <= c_info["duration"] <= 60.5
 
         # Validate narrative arc generation requirements on test_video duration
         engine = EditorialEngine()

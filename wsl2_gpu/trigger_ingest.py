@@ -19,7 +19,7 @@ import nats
 
 async def main():
     if len(sys.argv) > 1:
-        source_path = sys.argv[1]
+        source_path = " ".join(sys.argv[1:])
     else:
         source_path = "/data/input_videos/input.mp4"
 

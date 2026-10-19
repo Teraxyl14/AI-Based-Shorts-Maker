@@ -77,6 +77,26 @@ class Orchestrator:
         # Active serial job tracking
         self.active_state: Optional[PipelineState] = None
         self.active_msg = None  # Original video.ingest message — ACK at the very end
+        self.current_job_start_time = None
+
+    def _write_pipeline_status(self, stage: str, status: str = "processing", extra: Optional[Dict[str, Any]] = None):
+        try:
+            p_path = "/data/pipeline_status.json"
+            now = time.time()
+            payload = {
+                "status": status,
+                "current_stage": stage,
+                "source_path": getattr(self.active_state, "source_path", None) if self.active_state else None,
+                "output_dir": getattr(self.active_state, "output_dir", None) if self.active_state else None,
+                "timestamp": now,
+                "pipeline_start_time": getattr(self, "current_job_start_time", now),
+                "stage_start_time": now,
+                **(extra or {})
+            }
+            with open(p_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not write pipeline status file: {e}")
 
     async def run(self):
         logger.info(f"Connecting to NATS at {self.nats_url}...")
@@ -186,6 +206,8 @@ class Orchestrator:
             )
             self.active_msg = msg
             job_start_time = time.time()
+            self.current_job_start_time = job_start_time
+            self._write_pipeline_status("phase1_asr", "processing", {"video_name": os.path.basename(source_path)})
 
             # ═════════════════════════════════════════════════════════════════
             # PHASE 1: ASR Transcription (Spawned Subprocess)
@@ -219,6 +241,7 @@ class Orchestrator:
             # ═════════════════════════════════════════════════════════════════
             logger.info("════════════ Phase 2: Vision & VLM Editorial [SUBPROCESS] ════════════")
             self.active_state.current_stage = "phase2_vlm_editorial"
+            self._write_pipeline_status("phase2_vlm_editorial", "processing", {"words_count": len(words_data)})
 
             phase2_result = await asyncio.to_thread(
                 self.phase2_runner.run_phase,
@@ -270,6 +293,7 @@ class Orchestrator:
             # ═════════════════════════════════════════════════════════════════
             logger.info("════════════ Phase 3: Render [SUBPROCESS] ════════════")
             self.active_state.current_stage = "phase3_render"
+            self._write_pipeline_status("phase3_render", "processing", {"shorts_count": len(editorial_shorts)})
 
             render_manifest = {
                 "editorial_shorts": editorial_shorts,
@@ -278,6 +302,19 @@ class Orchestrator:
                 "scene_changes": scene_data,
                 "transcript_beats": transcript_beats,
             }
+
+            # Durable artifact persistence: write Phase 1 & 2 outputs so downstream re-renders never lose data
+            try:
+                os.makedirs(output_dir, exist_ok=True)
+                with open(os.path.join(output_dir, "transcript_words.json"), "w", encoding="utf-8") as f:
+                    json.dump(words_data, f)
+                with open(os.path.join(output_dir, "spatial_events.json"), "w", encoding="utf-8") as f:
+                    json.dump(spatial_data, f)
+                with open(os.path.join(output_dir, "scene_changes.json"), "w", encoding="utf-8") as f:
+                    json.dump(scene_data, f)
+                logger.info(f"Persisted Phase 1 & 2 artifacts to {output_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to persist intermediate artifacts: {e}")
 
             phase3_result = await asyncio.to_thread(
                 self.phase3_runner.run_phase,
@@ -335,11 +372,18 @@ class Orchestrator:
                 json.dump(metadata, f, indent=2, default=str)
             logger.info(f"Saved execution metadata to: {metadata_file}")
 
+            self._write_pipeline_status("completed", "completed", {
+                "total_elapsed_s": round(total_elapsed, 2),
+                "successful_shorts": successful,
+                "failed_shorts": failed
+            })
+
             await msg.ack()
             logger.info("ACKed video.ingest message.")
 
         except Exception as e:
             logger.error(f"Pipeline job failed: {e}", exc_info=True)
+            self._write_pipeline_status("failed", "failed", {"error": str(e)})
             if self.active_msg:
                 await self.active_msg.ack()
         finally:

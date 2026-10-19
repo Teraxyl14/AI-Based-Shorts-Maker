@@ -19,14 +19,25 @@
 
 ## ⚡ Highlights & Key Innovations
 
+- **End-to-End 4-Spoke Autonomous YouTube Shorts Studio**:
+  - **Spoke 1 — Intelligent Sourcing (`trending_spoke.py`)**: Continuously monitors Google Trends RSS for breakout viral queries, scrapes YouTube candidate videos (1080p30+, 5m–45m duration), filters out sensitive/controversial topics, and extracts the YouTube player **retention heatmap curve** to identify high-density replay spikes before downloading.
+  - **Spoke 2 — Quality Downloader & Storage Governor (`download_spoke.py`)**: Downloads high-bitrate media with hybrid rights classification (`CC_BY_AUTO` for automated scheduling vs `FAIR_USE_REVIEW` for human approval). Automatically purges raw multi-gigabyte source files once Phase 3 render certification is confirmed, saving ~35 GB/day.
+  - **Spoke 3 — Project Aether Core Engine**: Speech-to-text with Whisper ASR sub-frame word timestamps, YOLO11s-Pose tracking at 6–10 fps with masked-character head centroid estimation, multimodal Qwen2.5-VL editorial intelligence, and OSQP kinematic crop trajectories.
+  - **Spoke 4 — YouTube Publisher & Algorithmic Scheduler (`publisher_spoke.py`)**: Enforces strict daily quota budgeting (10,000 units/day, max 3–4 drops/day) with algorithmic drip pacing at peak audience windows (11:30 AM, 4:30 PM, 8:30 PM), viral hook title generation, and custom action thumbnail attachment.
+- **Dedicated Studio Web Dashboard Platform (`http://localhost:8888`)**:
+  - Zero-dependency web platform featuring source video selection, real-time dual timers (running stopwatch + countdown to completion), 3-phase visual stepper, live RTX 5080 GPU telemetry, 9:16 vertical modal video player with HTTP Range `206 Partial Content` streaming, interactive Review Queue, and 1-click **"Approve & Publish to YouTube"**.
+- **Automated Pre-Publish Quality Assurance (QA) Gate (`qa_gate.py`)**:
+  - Rigorous certification gate validating deterministic A/V sync ($\Delta < 50$ms), narrative pacing ($50.0\text{s} - 60.5\text{s}$), $1080 \times 1920$ resolution, and keyframe-sampled full-bleed composition certifying zero 16:9 letterbox collapse.
+- **Batch-and-Sleep Thermal Governor**:
+  - Executes 4 automated pulses per day (~3 minutes GPU processing per pulse = ~12 minutes total active GPU time/day). Evaluates GPU temperature via `nvidia-smi` and automatically throttles if GPU $> 80^\circ\text{C}$, allowing the laptop GPU to rest at 0% load and 45°C for 23.8 hours/day.
 - **Universal Multi-Layout Semantic Framing Engine**:
-  - **Mode 1 — Smart Portrait Pan with Adaptive Face Headroom**: Dynamically senses face bounding box scale. Wide/medium shots receive a 100% full-bleed 9:16 vertical crop. Close-up shots widen the crop by 25% with vibrant 85% luminance Gaussian-blurred top/bottom bands, preserving natural shoulders and comfortable breathing room with zero solid black borders.
+  - **Mode 1 — Full-Bleed Portrait Pan**: 100% full-bleed vertical 9:16 portrait pan for all dialogue and narrative scenes. Masks and occluded faces (e.g. Spider-Man) tracked via dynamic head centroid estimation from ears and shoulders.
   - **Mode 2 — Full-Frame Topic & Screencast Close-Up**: Software windows, desktop recordings, monitors, maps, gameplay, and demonstrated items render in complete **9:16 vertical ratio** centered on active UI elements and cursor movements without letterbox padding.
   - **Mode 3 — Dual-Pane Split-Screen with Neon Glowing Divider**: Automatically pairs verified speakers with active demonstration topics using a styled 4px `#CCFF00` neon glowing divider. Gated by strict spatial separation ($\text{IoU} < 0.05$, Euclidean distance $\ge 0.30$) with automatic fallback to portrait pan to completely eliminate duplicate identical presenter panes.
 - **Tripod-Locked Kinematic Dead-Zone Stabilization**:
   - Virtual camera pan paths are optimized via **OSQP Quadratic Programming**:
     $$\min_{x} \sum_{t} (x_t - p_t)^2 + \lambda_v (x_t - x_{t-1})^2 + \lambda_a (x_{t+1} - 2x_t + x_{t-1})^2$$
-  - Anchored $\pm 65\text{px}$ kinematic dead-zone filter with regularized motion penalties ($\lambda_v = 50.0, \lambda_a = 90.0$) and gestural jerk suppression clamps camera velocity to 0.0 during presenter dialogue, behaving like an operator on a rock-steady tripod.
+  - Anchored $\pm 65\text{px}$ kinematic dead-zone filter with regularized motion penalties ($\lambda_v = 20.0, \lambda_a = 35.0$) clamps camera velocity to 0.0 during dialogue, behaving like an operator on a rock-steady tripod while panning responsively during subject motion.
 - **Micro-Stutter Free Continuous Stream Decoding**:
   - Slices and streams contiguous editorial cuts in a single continuous NVDEC decode process, completely bypassing keyframe seeking and frame re-initialization artifacts to eliminate 1-frame flashes between scene transitions.
 - **Strict 50s–60s Viral Pacing & Duration Bounds**:

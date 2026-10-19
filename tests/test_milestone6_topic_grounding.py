@@ -398,7 +398,7 @@ class TestVisionSpokeEnhancements:
         # Case 1: No objects detected -> Should synthesize demonstration ROI
         synth_roi = generate_synthetic_demonstration_roi(person_event, existing_objects=[])
         assert synth_roi is not None
-        assert synth_roi.label == "demonstration_action"
+        assert synth_roi.label in ("demonstration_action", "synthetic_wrist_roi")
         assert synth_roi.action_label == "held_product"
         assert synth_roi.timestamp == 5.0
         # BBox should be centered near the active wrist

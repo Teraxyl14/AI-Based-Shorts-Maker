@@ -65,8 +65,7 @@ SPEAKER_LABELS = frozenset({
 ITEM_LABELS = frozenset({
     "laptop", "cell phone", "bottle", "cup", "book", "remote", "scissors", "knife",
     "spoon", "fork", "mouse", "keyboard", "monitor", "tv", "screen", "display",
-    "tablet", "toothbrush", "held_product", "product", "hardware_component",
-    "demonstration_action"
+    "tablet", "toothbrush", "product", "hardware_component"
 })
 
 
@@ -769,13 +768,13 @@ class EngagementEvaluator:
             # Handle relative vs absolute timestamps
             abs_ts = (ts + clip_start) if (ts < clip_dur * 1.2 and clip_start > 0.0) else ts
 
-            # Require confidence >= 0.50 to avoid ByteTrack ghost tracks on computer monitors
-            if t_start - 0.5 <= abs_ts <= t_end + 0.5 and conf >= 0.50:
+            # Require confidence >= 0.40 for physical item detection
+            if t_start - 0.5 <= abs_ts <= t_end + 0.5 and conf >= 0.40:
                 if lbl in SPEAKER_LABELS:
                     human_verified = True
                     has_speaker = True
                     speaker_bbox = bbox
-                elif lbl in ITEM_LABELS or action_lbl == "held_product" or lbl == "demonstration_action":
+                elif lbl in ITEM_LABELS and lbl not in ("synthetic_wrist_roi", "demonstration_action"):
                     topic_verified = True
                     has_topic = True
                     topic_bbox = bbox
@@ -786,10 +785,12 @@ class EngagementEvaluator:
             if not topic_verified:
                 has_topic = False
 
-        # Ensure topic and speaker are not the exact same detection (avoid duplicate identical panes)
+        # Ensure topic and speaker are physically distinct and not part of the same human body/cheek
         if has_speaker and has_topic:
             dist = math.hypot(speaker_bbox[0] - topic_bbox[0], speaker_bbox[1] - topic_bbox[1])
-            if dist < 0.30:
+            dx = abs(speaker_bbox[0] - topic_bbox[0])
+            dy = abs(speaker_bbox[1] - topic_bbox[1])
+            if dist < 0.35 or (dx < 0.18 and dy < 0.40):
                 has_topic = False
 
         return has_speaker, has_topic, speaker_bbox, topic_bbox
