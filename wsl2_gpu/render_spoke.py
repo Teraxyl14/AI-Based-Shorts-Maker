@@ -1224,14 +1224,30 @@ class ThreeThreadRenderPipeline:
                 else (s.segment_end - s.segment_start)
                 for s in self.clip.segments
             ])
+            bgm_file = getattr(self.job, "bgm_path", None) or os.getenv("AETHER_BGM_FILE", None)
+            has_bgm = bool(bgm_file and os.path.exists(bgm_file))
+
             cmd = [
                 "ffmpeg", "-y",
                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{target_w}x{target_h}", "-r", str(self.job.target_fps),
                 "-i", "pipe:0",
                 "-i", wav_path,
-                "-map", "0:v", "-map", "1:a",
-                "-c:v", codec_to_use
             ]
+
+            if has_bgm:
+                cmd += [
+                    "-stream_loop", "-1", "-i", bgm_file,
+                    "-filter_complex",
+                    "[1:a]asplit=2[sc][speech];[2:a]volume=0.25[bgm];[bgm][sc]sidechaincompress=threshold=0.08:ratio=5:attack=150:release=450[ducked_bgm];[speech][ducked_bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    "-map", "0:v", "-map", "[aout]",
+                ]
+                logger.info(f"[Clip {self.idx}] Mixing auto-ducked background music: {os.path.basename(bgm_file)}")
+            else:
+                cmd += [
+                    "-map", "0:v", "-map", "1:a",
+                ]
+
+            cmd += ["-c:v", codec_to_use]
 
             if codec_to_use == "av1_nvenc":
                 cmd += ["-preset", "p7", "-tune", "hq", "-b:v", "4M", "-maxrate", "6M", "-bufsize", "8M", "-pix_fmt", "yuv420p"]

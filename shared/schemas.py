@@ -383,6 +383,7 @@ class RenderJob(BaseModel):
     spatial_events: List[dict] = Field(default_factory=list, description="YOLOE-26 spatial events for active tracking")
     crop_path_data: List[List[float]] = Field(default_factory=list, description="Pre-computed [N, 2] crop center path (normalized cx, cy per frame)")
     scene_cut_frames: List[int] = Field(default_factory=list, description="Frame indices of detected scene cuts for trajectory teleports")
+    bgm_path: Optional[str] = Field(default=None, description="Optional path to background music track for auto-ducked mixing")
 
 
 # ─── Pipeline State (LangGraph root schema) ──────────────────────────────────
