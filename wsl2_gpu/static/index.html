@@ -378,13 +378,13 @@
 
     <!-- Section 4: Live Log Console Drawer -->
     <section class="glass-card rounded-2xl p-5">
-      <div class="flex items-center justify-between cursor-pointer" onclick="toggleLogs()">
+      <button type="button" aria-expanded="true" aria-controls="logContainer" aria-label="Toggle live pipeline event log" class="w-full flex items-center justify-between cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-cyan-500 rounded-lg p-1 bg-transparent border-0" onclick="toggleLogs()">
         <div class="flex items-center space-x-2 text-xs font-semibold text-slate-300">
           <i data-lucide="terminal" class="w-4 h-4 text-cyan-400"></i>
           <span>Live Pipeline Event Log</span>
         </div>
         <i id="logChevron" data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transition-transform"></i>
-      </div>
+      </button>
       <div id="logContainer" class="mt-4 bg-slate-950 rounded-xl p-3 border border-slate-800/80 font-mono text-xs text-slate-400 h-44 overflow-y-auto custom-scrollbar space-y-1">
         <div class="text-slate-500">[System] Initializing Project Aether Studio Dashboard...</div>
       </div>
@@ -395,14 +395,14 @@
   <!-- Video Player Modal -->
   <div id="videoModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
     <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl relative flex flex-col items-center p-4">
-      <button onclick="closeVideoModal()" class="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-slate-800/80 hover:bg-slate-700 flex items-center justify-center text-slate-300 hover:text-white transition">
+      <button onclick="closeVideoModal()" type="button" aria-label="Close video player" class="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-slate-800/80 hover:bg-slate-700 flex items-center justify-center text-slate-300 hover:text-white transition cursor-pointer">
         <i data-lucide="x" class="w-5 h-5"></i>
       </button>
 
       <h3 id="modalVideoTitle" class="text-sm font-semibold text-white mb-3 pr-10 text-center truncate w-full">Short Playback</h3>
 
       <div class="w-[270px] h-[480px] bg-black rounded-xl overflow-hidden shadow-inner flex items-center justify-center relative">
-        <video id="modalVideoPlayer" controls autoplay loop playsinline class="w-full h-full object-contain">
+        <video id="modalVideoPlayer" controls autoplay muted loop playsinline class="w-full h-full object-contain">
           <source src="" type="video/mp4">
           Your browser does not support the video tag.
         </video>
@@ -514,19 +514,20 @@
           card.className = "glass-card rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500/40 transition group flex flex-col";
 
           const thumbSrc = s.thumbnail_url || "";
+          const safeTitle = s.title.replace(/"/g, '&quot;').replace(/'/g, "\\'");
           card.innerHTML = `
-            <div class="relative w-full aspect-[9/16] bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center" onclick="openVideoModal('${s.video_url}', '${s.title.replace(/'/g, "\\'")}', '${s.duration_seconds}')">
-              ${thumbSrc ? `<img src="${thumbSrc}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">` : `<i data-lucide="play-circle" class="w-12 h-12 text-slate-600"></i>`}
+            <button type="button" aria-label="Play ${safeTitle}" class="relative w-full aspect-[9/16] bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center border-0 p-0 text-left focus:outline-none focus:ring-2 focus:ring-blue-500" onclick="openVideoModal('${s.video_url}', '${safeTitle}', '${s.duration_seconds}')">
+              ${thumbSrc ? `<img src="${thumbSrc}" alt="Thumbnail for ${safeTitle}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">` : `<i data-lucide="play-circle" class="w-12 h-12 text-slate-600"></i>`}
               <div class="absolute inset-0 bg-black/40 group-hover:bg-black/20 flex items-center justify-center transition">
                 <div class="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center shadow-lg transform group-hover:scale-110 transition">
                   <i data-lucide="play" class="w-5 h-5 fill-current ml-0.5"></i>
                 </div>
               </div>
-              <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[11px] font-mono text-white bg-slate-950/80 px-2 py-1 rounded backdrop-blur">
+              <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[11px] font-mono text-white bg-slate-950/80 px-2.5 py-1 rounded backdrop-blur">
                 <span>⏱ ${s.duration_seconds}s</span>
                 <span class="text-emerald-400 font-bold">Δ ${s.sync_delta_ms}ms</span>
               </div>
-            </div>
+            </button>
 
             <div class="p-4 flex-1 flex flex-col justify-between">
               <div>
