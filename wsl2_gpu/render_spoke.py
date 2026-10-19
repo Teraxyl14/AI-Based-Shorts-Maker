@@ -477,14 +477,8 @@ class ThreeThreadRenderPipeline:
                 self.errors.append("Failed to probe video dimensions")
                 return False, output_path
 
-            # Step 2: Check AV1 NVENC hardware encoder support
-            codec_to_use = "av1_nvenc"
-            if not self._check_av1_nvenc_support():
-                logger.warning(
-                    f"av1_nvenc initialization not supported or restricted for clip {self.idx}. "
-                    f"Using libx264 software encoding."
-                )
-                codec_to_use = "libx264"
+            # Step 2: Detect best hardware NVENC or software encoder
+            codec_to_use = self._detect_best_hardware_encoder()
 
             # Step 3: Extract and stitch raw clip audio segments to WAV
             stitched_audio_path = os.path.join(tmpdir, f"audio_{self.idx}.wav")
@@ -837,19 +831,31 @@ class ThreeThreadRenderPipeline:
             logger.error(f"[Clip {self.idx}] ffprobe failed: {e}")
             return 0, 0
 
+    def _detect_best_hardware_encoder(self) -> str:
+        """Detects best hardware NVENC encoder supported on the host GPU (tested with 1080x1920)."""
+        for enc in ["h264_nvenc", "hevc_nvenc", "av1_nvenc"]:
+            try:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "lavfi", "-i", "color=c=blue:s=1080x1920:d=0.1",
+                    "-c:v", enc,
+                    "-f", "null", "-"
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if res.returncode == 0:
+                    logger.info(f"[Clip {self.idx}] Hardware NVENC encoder selected: {enc}")
+                    return enc
+            except Exception:
+                continue
+
+        logger.warning(
+            f"[Clip {self.idx}] Hardware NVENC not available. Using libx264 software fallback."
+        )
+        return "libx264"
+
     def _check_av1_nvenc_support(self) -> bool:
-        """Verifies if av1_nvenc is available and working on the host GPU."""
-        try:
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=0.1",
-                "-c:v", "av1_nvenc",
-                "-f", "null", "-"
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            return res.returncode == 0
-        except Exception:
-            return False
+        """Backwards compatibility check for av1_nvenc."""
+        return self._detect_best_hardware_encoder() == "av1_nvenc"
 
     # ─── Thread 1: Decode Thread ─────────────────────────────────────────────
 
@@ -956,6 +962,11 @@ class ThreeThreadRenderPipeline:
 
             frame_idx = 0
             target_fps = float(self.job.target_fps)
+            clip_total_duration = sum([
+                (s.segment_end - s.segment_start) if hasattr(s, "segment_end")
+                else (s.get("segment_end", 0.0) - s.get("segment_start", 0.0))
+                for s in self.clip.segments
+            ])
 
             while not self.stop_event.is_set():
                 try:
@@ -1170,6 +1181,18 @@ class ThreeThreadRenderPipeline:
                 else:
                     processed_final = processed
 
+                # Bottom Neon Gradient Retention Scrubber (#38BDF8 cyan -> #CCFF00 electric lime)
+                if clip_total_duration > 0.0:
+                    prog = min(1.0, max(0.0, stitched_time / clip_total_duration))
+                    bar_w = min(target_w, max(0, int(round(target_w * prog))))
+                    if bar_w > 0:
+                        cols = torch.linspace(0.0, 1.0, bar_w, device=self.device, dtype=torch.float32)
+                        r = (56.0 + (204.0 - 56.0) * cols).byte()
+                        g = (189.0 + (255.0 - 189.0) * cols).byte()
+                        b = (248.0 + (0.0 - 248.0) * cols).byte()
+                        grad_line = torch.stack([r, g, b], dim=-1).unsqueeze(0)
+                        processed_final[target_h-3:target_h, 0:bar_w, :] = grad_line.expand(3, -1, -1)
+
                 # Write to target render slot
                 self.render_slots[slot].copy_(processed_final, non_blocking=True)
                 
@@ -1211,9 +1234,11 @@ class ThreeThreadRenderPipeline:
             ]
 
             if codec_to_use == "av1_nvenc":
-                cmd += ["-preset", "p7", "-tune", "hq", "-b:v", "4M", "-maxrate", "6M", "-bufsize", "8M"]
+                cmd += ["-preset", "p7", "-tune", "hq", "-b:v", "4M", "-maxrate", "6M", "-bufsize", "8M", "-pix_fmt", "yuv420p"]
+            elif "nvenc" in codec_to_use:
+                cmd += ["-preset", "p4", "-tune", "hq", "-b:v", "6M", "-maxrate", "9M", "-bufsize", "12M", "-pix_fmt", "yuv420p"]
             else:
-                cmd += ["-preset", "medium", "-crf", "20"]
+                cmd += ["-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
 
             if total_duration > 0:
                 cmd += ["-t", f"{total_duration:.3f}"]

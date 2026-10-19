@@ -550,17 +550,19 @@ class SubtitleCompositor:
                 b_val = int(COLOR_NORMAL[2] + (COLOR_ACTIVE[2] - COLOR_NORMAL[2]) * alpha_scale)
                 fill_color = (r, g, b_val, 255)
 
-                # Render with ~14% kinetic scale pop
+                # Render with dynamic spring pop
                 active_font = resolve_font_for_text(display_text, self.font_size_active)
                 word_img = _render_outlined_word(display_text, active_font, fill_color=fill_color)
 
-                normal_check_font = resolve_font_for_text(display_text, self.font_size)
-                if getattr(active_font, "size", 0) == getattr(normal_check_font, "size", 0):
-                    from PIL import Image
-                    pil_w = Image.fromarray(word_img)
-                    pop_w = max(1, int(round(word_img.shape[1] * SCALE_POP_FACTOR)))
-                    pop_h = max(1, int(round(word_img.shape[0] * SCALE_POP_FACTOR)))
-                    word_img = np.array(pil_w.resize((pop_w, pop_h), Image.Resampling.BILINEAR), dtype=np.uint8)
+                elapsed_w = max(0.0, timestamp - active_w_start)
+                spring_scale = SCALE_POP_FACTOR + 0.10 * math.exp(-12.0 * elapsed_w) * math.cos(20.0 * elapsed_w)
+                spring_scale = max(1.05, min(1.28, spring_scale))
+
+                from PIL import Image
+                pil_w = Image.fromarray(word_img)
+                pop_w = max(1, int(round(word_img.shape[1] * (spring_scale / SCALE_POP_FACTOR))))
+                pop_h = max(1, int(round(word_img.shape[0] * (spring_scale / SCALE_POP_FACTOR))))
+                word_img = np.array(pil_w.resize((pop_w, pop_h), Image.Resampling.BILINEAR), dtype=np.uint8)
 
                 ascent = active_font.getmetrics()[0] if hasattr(active_font, "getmetrics") else int(round(word_img.shape[0] * 0.72))
                 baseline_in_img = (STROKE_WIDTH + 8) + ascent
