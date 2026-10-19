@@ -15,6 +15,8 @@ from urllib.parse import urlparse, parse_qs
 
 # Base directories
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 DATA_DIR = os.path.join(BASE_DIR, "data")
 INPUT_VIDEOS_DIR = os.path.join(DATA_DIR, "input_videos")
 OUTPUT_SHORTS_DIR = os.path.join(DATA_DIR, "output_shorts")
@@ -328,7 +330,29 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"topics": [], "error": str(e)}, 200)
             return
 
-        # ── Route 9: GET /api/media/{hash}/{file} (HTTP Range Video Streaming) ──
+        # ── Route 9: GET /api/analytics (Closed-Loop Retention Memory & Exemplars) ──
+        if path == "/api/analytics":
+            try:
+                from wsl2_gpu.retention_learner import load_learning_memory
+                memory = load_learning_memory()
+                ledger_path = os.path.join(DATA_DIR, "analytics_ledger.json")
+                ledger = []
+                if os.path.exists(ledger_path):
+                    try:
+                        with open(ledger_path, "r", encoding="utf-8") as lf:
+                            ledger = json.load(lf)
+                    except Exception:
+                        pass
+                self._send_json({
+                    "learning_memory": memory,
+                    "ledger": ledger[-10:],
+                    "exemplars_count": len(memory.get("high_retention_exemplars", []))
+                })
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        # ── Route 10: GET /api/media/{hash}/{file} (HTTP Range Video Streaming) ──
         if path.startswith("/api/media/"):
             rel_path = path[len("/api/media/"):].strip("/")
             full_media_path = os.path.normpath(os.path.join(OUTPUT_SHORTS_DIR, rel_path))
