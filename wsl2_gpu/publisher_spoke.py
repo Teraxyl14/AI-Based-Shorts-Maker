@@ -121,6 +121,49 @@ def generate_viral_seo_metadata(raw_title: str,
     }
 
 
+def generate_syndication_package(raw_title: str,
+                                 summary: str = "",
+                                 is_cc: bool = False,
+                                 uploader: str = "Original Creator") -> Dict[str, Any]:
+    """
+    Generates tailored, multi-platform publishing metadata for YouTube Shorts,
+    TikTok Content Posting API, and Instagram Reels Graph API.
+    """
+    yt = generate_viral_seo_metadata(raw_title, summary, is_cc, uploader)
+
+    clean_title = raw_title.replace("Viral Arc", "").strip(" :-,")
+    if len(clean_title) > 40:
+        clean_title = clean_title[:37] + "..."
+
+    # TikTok: strict < 150 char caption with highest-indexing FYP tags
+    tt_caption = f"{clean_title} 😱 #fyp #viral #movieclips #shorts #foryou"
+    if len(tt_caption) > 150:
+        tt_caption = tt_caption[:147] + "..."
+
+    # Instagram Reels: engagement-provoking question + reels tags
+    ig_caption = (
+        f"Did you catch this moment? 👇\n\n"
+        f"{summary or clean_title}\n\n"
+        f"Follow for daily cinematic moments!\n"
+        f"#reels #reelsinstagram #trending #viralvideos #movieclips"
+    )
+
+    return {
+        "youtube": yt,
+        "tiktok": {
+            "caption": tt_caption,
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "disable_duet": False,
+            "disable_stitch": False,
+            "disable_comment": False,
+        },
+        "instagram_reels": {
+            "caption": ig_caption,
+            "share_to_feed": True,
+        }
+    }
+
+
 def publish_short(video_path: str,
                   raw_title: str = "Cinematic Short",
                   summary: str = "",
