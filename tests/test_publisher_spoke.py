@@ -100,7 +100,12 @@ class TestSyndicationAndPublishing:
         assert pkg["youtube"]["contains_synthetic_media"] is True
         assert len(pkg["tiktok"]["caption"]) <= 150
 
-    def test_publish_short_dry_run_includes_enterprise_fields(self, tmp_path):
+    def test_publish_short_dry_run_includes_enterprise_fields(self, tmp_path, monkeypatch):
+        # Isolate history file to tmp_path so test is 100% hermetic
+        isolated_history = tmp_path / "test_pub_history.json"
+        monkeypatch.setattr("wsl2_gpu.publisher_spoke.HISTORY_FILE", str(isolated_history))
+        monkeypatch.setattr("wsl2_gpu.publisher_spoke.get_todays_upload_count", lambda: 0)
+
         dummy_video = tmp_path / "test_short.mp4"
         dummy_video.write_bytes(b"\x00" * 1024)
 
@@ -122,6 +127,15 @@ class TestSyndicationAndPublishing:
         assert res["contains_synthetic_media"] is True
         assert res["notify_subscribers"] is False
         assert res["srt_path"] == str(dummy_srt)
+
+    def test_publish_short_quota_held(self, tmp_path, monkeypatch):
+        dummy_video = tmp_path / "test_short.mp4"
+        dummy_video.write_bytes(b"\x00" * 1024)
+        monkeypatch.setattr("wsl2_gpu.publisher_spoke.get_todays_upload_count", lambda: 4)
+
+        res = publish_short(str(dummy_video), raw_title="Over Quota Short")
+        assert res["status"] == "quota_held"
+        assert res["daily_uploads"] == 4
 
     def test_add_video_to_playlist_mock(self):
         mock_youtube = MagicMock()
