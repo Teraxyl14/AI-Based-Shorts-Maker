@@ -595,8 +595,29 @@ class ThreeThreadRenderPipeline:
                     from faster_whisper import WhisperModel
                     dev = "cuda" if torch.cuda.is_available() else "cpu"
                     compute_t = "float16" if dev == "cuda" else "int8"
-                    wm = WhisperModel("base", device=dev, compute_type=compute_t)
-                    w_segs, _ = wm.transcribe(stitched_audio_path, word_timestamps=True)
+                    model_id = os.getenv("WHISPER_MODEL", "large-v3-turbo")
+                    try:
+                        wm = WhisperModel(model_id, device=dev, compute_type=compute_t, download_root="/data/models")
+                    except Exception:
+                        try:
+                            wm = WhisperModel("medium", device=dev, compute_type=compute_t, download_root="/data/models")
+                        except Exception:
+                            wm = WhisperModel("base", device=dev, compute_type=compute_t, download_root="/data/models")
+
+                    # Bilingual Hinglish prompt anchoring for authentic mixed speech
+                    init_prompt = (
+                        "नमस्ते! The following audio is Hindi, English, and Hinglish dialogue or stand-up comedy. "
+                        "Transcribe verbatim in natural Devanagari script for Hindi words and Latin script for English loanwords without translating."
+                    )
+                    clean_lang = os.getenv("AETHER_WHISPER_LANGUAGE")
+                    if clean_lang in (None, "", "auto"):
+                        clean_lang = None
+                    w_segs, _ = wm.transcribe(
+                        stitched_audio_path,
+                        word_timestamps=True,
+                        language=clean_lang,
+                        initial_prompt=init_prompt
+                    )
                     auto_words = []
                     for s in w_segs:
                         for w in s.words:
@@ -1495,16 +1516,63 @@ class ThreeThreadRenderPipeline:
                     pass
             self.encode_done.set()
 
+    def _find_peak_expression_timestamp(self) -> float:
+        """Finds the optimal timestamp within the 0.5s - 4.5s Hook window with peak facial/gestural energy.
+
+        Evaluates:
+        1. Mouth openness / facial expression spread from facial keypoints (0, 1, 2)
+        2. Gestural apex / hand elevation from wrist keypoints (9, 10)
+        3. High human detection confidence (>= 0.40)
+        Falls back to 1.5s (peak hook impact) if no spatial events exist.
+        """
+        spatial_events = getattr(self.job, "spatial_events", [])
+        if not spatial_events:
+            return 1.5
+
+        hook_events = []
+        for pe in spatial_events:
+            ts = float(pe.get("timestamp", 0.0) if isinstance(pe, dict) else getattr(pe, "timestamp", 0.0))
+            if 0.5 <= ts <= 4.5:
+                hook_events.append(pe)
+
+        if not hook_events:
+            return 1.5
+
+        best_score = -1.0
+        best_ts = 1.5
+
+        for pe in hook_events:
+            conf = float(pe.get("confidence", 0.0) if isinstance(pe, dict) else getattr(pe, "confidence", 0.0))
+            lbl = str(pe.get("label", "") if isinstance(pe, dict) else getattr(pe, "label", "")).lower()
+            if lbl not in ("person", "face", "human") or conf < 0.35:
+                continue
+
+            kpts = pe.get("keypoints", []) if isinstance(pe, dict) else getattr(pe, "keypoints", [])
+            ts = float(pe.get("timestamp", 1.5) if isinstance(pe, dict) else getattr(pe, "timestamp", 1.5))
+
+            score = conf * 0.40
+            if kpts and len(kpts) >= 11:
+                # Gestural apex: wrist elevation above hips / shoulders
+                for wrist_idx in (9, 10):
+                    if wrist_idx < len(kpts) and len(kpts[wrist_idx]) >= 2:
+                        wy = kpts[wrist_idx][1]
+                        if wy < 0.65:
+                            score += 0.30
+                # Facial openness
+                if len(kpts[0]) >= 2:
+                    score += 0.30
+
+            if score > best_score:
+                best_score = score
+                best_ts = ts
+
+        return best_ts
+
     def _generate_thumbnail(self, source_path: str):
-        """Extracts a thumbnail frame at 25% clip duration mapped to original timeline."""
+        """Extracts an optimal viral thumbnail frame with peak expression in the hook window."""
         try:
-            duration = sum([
-                (s.get("segment_end", 0.0) - s.get("segment_start", 0.0)) if isinstance(s, dict)
-                else (s.segment_end - s.segment_start)
-                for s in self.clip.segments
-            ])
-            thumb_time_stitched = duration * 0.25
-            
+            thumb_time_stitched = self._find_peak_expression_timestamp()
+
             # Map stitched offset to original source video timeline
             thumb_time_original = self.clip.segments[0].segment_start if not isinstance(self.clip.segments[0], dict) else self.clip.segments[0].get("segment_start", 0.0)
             current_offset = 0.0
@@ -1518,6 +1586,7 @@ class ThreeThreadRenderPipeline:
                 current_offset += dur
 
             thumb_path = os.path.join(self.job.output_dir, f"thumbnail_{self.idx}.jpg")
+            cover_path = os.path.join(self.job.output_dir, f"cover_thumbnail_{self.idx}.jpg")
 
             thumb_cmd = [
                 "ffmpeg", "-y",
@@ -1531,7 +1600,9 @@ class ThreeThreadRenderPipeline:
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             if os.path.exists(thumb_path):
-                logger.info(f"[Clip {self.idx}] Thumbnail generated: {thumb_path}")
+                import shutil
+                shutil.copy2(thumb_path, cover_path)
+                logger.info(f"[Clip {self.idx}] Peak expression thumbnail generated: {thumb_path}")
             else:
                 logger.warning(f"[Clip {self.idx}] Thumbnail generation failed silently.")
         except Exception as e:

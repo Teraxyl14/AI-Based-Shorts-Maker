@@ -91,6 +91,20 @@ def classify_video_content(probe: dict, filename: str = "") -> dict:
     aspect = (w / h) if (w > 0 and h > 0) else 1.777
     fn_lower = filename.lower()
 
+    # 0. Stand-Up Comedy / Solo Stage Performance (e.g. Ravi Gupta, stand-up specials)
+    stage_indicators = (
+        "stand-up", "standup", "comedy", "comedian", "stand up",
+        "ravi gupta", "bassi", "zakir", "bhuvan", "monologue", "special", "open mic"
+    )
+    if any(ind in fn_lower for ind in stage_indicators):
+        return {
+            "type": "STAGE_PERFORMANCE",
+            "icon": "🎭",
+            "label": "Stand-up / Stage Show",
+            "description": f"Solo stage performance ({round(dur / 60, 1)}m) • Prohibits split-screen, locks speaker tight framing",
+            "recommended_persona": "VIRAL_HOOK"
+        }
+
     # 1. Feature Movie / Cinematic Drama: Long duration (>= 45 min)
     if dur >= 2700.0 or "movie" in fn_lower or "film" in fn_lower:
         return {
@@ -695,6 +709,19 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                     "message": f"🚀 Pipeline started for {canonical_name} ({profile['label']} • Target: {target_count} shorts)"
                 })
 
+                # Resolve whisper transcription language
+                whisper_lang = data.get("whisper_language")
+                if not whisper_lang:
+                    cfg_file = os.path.join(DATA_DIR, "app_config.json")
+                    if os.path.exists(cfg_file):
+                        try:
+                            with open(cfg_file, "r", encoding="utf-8") as cf:
+                                whisper_lang = json.load(cf).get("whisper_language")
+                        except Exception:
+                            pass
+                if not whisper_lang:
+                    whisper_lang = "auto"
+
                 # Trigger pipeline through docker exec or nats trigger with target_shorts parameter
                 cmd = [
                     "docker", "exec", "-d",
@@ -702,6 +729,7 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                     "-e", f"AETHER_CONTENT_PROFILE={profile.get('type', 'GENERAL_VIDEO')}",
                     "-e", f"AETHER_VLM_PERSONA={profile.get('recommended_persona', 'VIRAL_HOOK')}",
                     "-e", f"AETHER_FRAMING_MODE={framing_mode}",
+                    "-e", f"AETHER_WHISPER_LANGUAGE={whisper_lang}",
                     "aether-orchestrator",
                     "python3", "wsl2_gpu/trigger_ingest.py", f"/data/input_videos/{canonical_name}", str(target_count)
                 ]

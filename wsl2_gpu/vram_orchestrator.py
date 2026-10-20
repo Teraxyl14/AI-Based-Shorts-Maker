@@ -463,16 +463,32 @@ def run_phase1_asr_worker(video_path: str, nats_url: str, result_pipe,
                           language: Optional[str] = None):
     """Phase 1 Worker: ASR Transcription (~3.5GB peak VRAM).
 
-    Loads Faster-Whisper distil-large-v3 INT8, transcribes the video,
-    and sends word timestamps back via pipe.
-    Strictly enforces task="transcribe" and language=None for native autodetect.
+    Loads Faster-Whisper large-v3-turbo, transcribes the video with native
+    Indic/Hinglish domain anchoring, and sends word timestamps back via pipe.
+    Supports language='auto'/None for autodetect, or explicit language overrides.
     """
     assert task == "transcribe", f"STRICTLY FORBID task='{task}', must be 'transcribe'"
-    assert language is None, f"Strictly enforce language=None for autodetect, got '{language}'"
 
     import sys
     import os
+    import json
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+    # Resolve language override from argument, environment variable, or user config
+    if language is None:
+        language = os.environ.get("AETHER_WHISPER_LANGUAGE")
+    if language is None:
+        for cfg_cand in ("/data/app_config.json", os.path.join(os.path.dirname(__file__), "..", "data", "app_config.json")):
+            if os.path.exists(cfg_cand):
+                try:
+                    with open(cfg_cand, "r", encoding="utf-8") as f:
+                        cfg_data = json.load(f)
+                        language = cfg_data.get("whisper_language")
+                        if language:
+                            break
+                except Exception:
+                    pass
+    clean_lang = None if (language in (None, "auto")) else str(language).strip()
 
     logger_w = logging.getLogger("Phase1-ASR-Worker")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -481,10 +497,10 @@ def run_phase1_asr_worker(video_path: str, nats_url: str, result_pipe,
         from wsl2_gpu.transcription_spoke import TranscriptionSpoke
         import asyncio
 
-        logger_w.info(f"Phase 1 ASR worker started for: {video_path} (task={task}, language={language})")
+        logger_w.info(f"Phase 1 ASR worker started for: {video_path} (task={task}, language={clean_lang})")
 
         spoke = TranscriptionSpoke(nats_url)
-        words = asyncio.run(spoke.transcribe_file(video_path, task=task, language=language))
+        words = asyncio.run(spoke.transcribe_file(video_path, task=task, language=clean_lang))
 
         # Serialize to JSON-safe dicts
         words_data = [w.model_dump() if hasattr(w, 'model_dump') else w for w in words]
@@ -643,8 +659,9 @@ def run_phase3_render_worker(video_path: str, render_manifest: dict,
         scene_data = render_manifest.get("scene_changes", [])
         scene_cut_frames = [sc.get("frame_idx", 0) for sc in scene_data]
         manifest_beats = render_manifest.get("transcript_beats", [])
+        content_profile = render_manifest.get("content_profile") or os.getenv("AETHER_CONTENT_PROFILE")
 
-        evaluator = EngagementEvaluator()
+        evaluator = EngagementEvaluator(content_profile=content_profile)
 
         results = []
 
@@ -725,6 +742,7 @@ def run_phase3_render_worker(video_path: str, render_manifest: dict,
                 spatial_events=norm_spatial_data,
                 transcript_beats=short_beats,
                 total_duration=duration_t,
+                content_profile=content_profile,
             )
 
             if eval_report.self_correction_applied:

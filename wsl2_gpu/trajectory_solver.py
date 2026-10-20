@@ -14,6 +14,8 @@ convex optimizer that guarantees:
   - Instantaneous teleport at shot cuts (no cross-shot smoothing)
 """
 
+import os
+import math
 import logging
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
@@ -290,8 +292,8 @@ def fuse_point_of_interest(spatial_events: List[Any],
     # Step 4: Compute per-frame POI with motion gating and topic grounding
     for f in range(total_frames):
         dets = frame_detections.get(f, [])
-        active_candidates: List[Tuple[float, float]] = []
-        other_candidates: List[Tuple[float, float]] = []
+        active_candidates: List[Tuple[float, float, Any]] = []
+        other_candidates: List[Tuple[float, float, Any]] = []
 
         # Find active focal target interval for frame f
         cur_ft_type = "speaker_primary"
@@ -477,11 +479,17 @@ def fuse_point_of_interest(spatial_events: List[Any],
             ]
 
             # Dual-Attractor: Detect physical held items / products in speaker's hands / interactive space
-            held_items = [
-                d for d in dets
-                if (d["label"] in ITEM_LABELS or d.get("action_label") == "held_product" or d["label"] in ("laptop", "screen", "monitor", "cell phone", "keyboard", "tablet"))
-                and (d.get("action_label") == "held_product" or abs(d["cx_px"] - last_active_cx_px) / src_width <= 0.30)
-            ]
+            # Excluded for STAGE_PERFORMANCE (microphones, stools, water bottles should not skew framing of comedian)
+            is_stage_performance = (
+                "STAGE_PERFORMANCE" in os.getenv("AETHER_CONTENT_PROFILE", "").upper()
+            )
+            held_items = []
+            if not is_stage_performance:
+                held_items = [
+                    d for d in dets
+                    if (d["label"] in ITEM_LABELS or d.get("action_label") == "held_product" or d["label"] in ("laptop", "screen", "monitor", "cell phone", "keyboard", "tablet"))
+                    and (d.get("action_label") == "held_product" or abs(d["cx_px"] - last_active_cx_px) / src_width <= 0.30)
+                ]
 
             cur_poi_y = src_height / 2.0
             if active_candidates:
@@ -554,6 +562,43 @@ def fuse_point_of_interest(spatial_events: List[Any],
 
 # Backward-compatible alias
 fuse_poi_targets = fuse_point_of_interest
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE 3-SECOND HOOK RETENTION SPIKE (DYNAMIC ZOOM PUNCH-IN)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def apply_hook_zoom_punch(crop_w: np.ndarray,
+                           crop_h: np.ndarray,
+                           fps: float = 30.0,
+                           zoom_duration_s: float = 2.5,
+                           max_zoom_pct: float = 0.08) -> Tuple[np.ndarray, np.ndarray]:
+    """Applies a smooth dynamic zoom punch-in during the first 0.0s - 2.5s (Hook window).
+
+    Viewers on short-form platforms (TikTok, Reels, Shorts) make swipe-away decisions
+    within the first 1.5 seconds. Starting with a subtle 108% punch-in on the speaker's
+    face that eases back to 100% over the first 2.5s stimulates the viewer's orienting reflex
+    and boosts short-form watch-through rate.
+
+    Returns:
+        Tuple of (zoomed_crop_w, zoomed_crop_h) in pixels.
+    """
+    total_frames = len(crop_w)
+    if total_frames == 0 or zoom_duration_s <= 0.0 or max_zoom_pct <= 0.0:
+        return crop_w, crop_h
+
+    zoom_frames = min(total_frames, int(round(zoom_duration_s * fps)))
+    out_w = crop_w.copy()
+    out_h = crop_h.copy()
+
+    for f in range(zoom_frames):
+        t_frac = f / float(max(1, zoom_frames))
+        # Cosine ease-out for organic camera operator feel
+        factor = 1.0 + max_zoom_pct * (0.5 * (1.0 + math.cos(math.pi * t_frac)))
+        out_w[f] = out_w[f] / factor
+        out_h[f] = out_h[f] / factor
+
+    return out_w, out_h
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -934,6 +979,9 @@ def solve_trajectory(spatial_events: List[Any],
             fallback[:, 2] = crop_width / src_width
             fallback[:, 3] = 1.0
             return fallback.view(TrajectoryTensor)
+
+    # Apply Hook Zoom Punch-in on first 2.5s (subtle 108% -> 100% digital push-in)
+    result_w, result_h = apply_hook_zoom_punch(result_w, result_h, fps=fps, zoom_duration_s=2.5, max_zoom_pct=0.08)
 
     # Step 4: Convert absolute pixel coordinates to normalized [0, 1]
     output = np.zeros((total_frames, 4), dtype=np.float64)

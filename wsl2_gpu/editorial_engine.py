@@ -179,8 +179,9 @@ def extract_beats_for_candidate(
 def classify_video_profile(transcript_words: List[Any],
                            spatial_events: Optional[List[Any]] = None,
                            video_duration: float = 300.0,
-                           scene_changes: Optional[List[Any]] = None) -> UniversalContentProfile:
-    """Classifies video into a UniversalContentProfile using acoustic, visual, and lexical signals.
+                           scene_changes: Optional[List[Any]] = None,
+                           source_path: Optional[str] = None) -> UniversalContentProfile:
+    """Classifies video into a UniversalContentProfile using acoustic, visual, filename, and lexical signals.
 
     Profiles:
         STAGE_PERFORMANCE: Standup comedy, solo theatrical acts, keynotes, talks
@@ -193,7 +194,33 @@ def classify_video_profile(transcript_words: List[Any],
     spatial_events = spatial_events or []
     scene_changes = scene_changes or []
 
-    # 1. Lexical signal analysis
+    # 0. Explicit Environment Override
+    env_profile = os.getenv("AETHER_CONTENT_PROFILE", "").strip().upper()
+    if env_profile == "STAGE_PERFORMANCE":
+        return UniversalContentProfile.STAGE_PERFORMANCE
+    elif env_profile == "TECH_REVIEW_DEMO":
+        return UniversalContentProfile.TECH_REVIEW_DEMO
+    elif env_profile == "GAMEPLAY_STREAM":
+        return UniversalContentProfile.GAMEPLAY_STREAM
+    elif env_profile == "WILDLIFE_NATURE":
+        return UniversalContentProfile.WILDLIFE_NATURE
+    elif env_profile == "CONVERSATIONAL_PODCAST":
+        return UniversalContentProfile.CONVERSATIONAL_PODCAST
+    elif env_profile == "CINEMATIC_NARRATIVE":
+        return UniversalContentProfile.CINEMATIC_NARRATIVE
+
+    # 1. Filename & Metadata Analysis (Highest signal for curated media like standup comedy)
+    if source_path:
+        fn_lower = os.path.basename(source_path).lower()
+        stage_indicators = {
+            "stand-up", "standup", "comedy", "comedian", "stand up",
+            "ravi gupta", "bassi", "zakir", "bhuvan", "monologue",
+            "open mic", "live comedy", "comic", "standup comedy"
+        }
+        if any(ind in fn_lower for ind in stage_indicators):
+            return UniversalContentProfile.STAGE_PERFORMANCE
+
+    # 2. Lexical signal analysis
     text_corpus = " ".join([
         str(w.get("word", "") if isinstance(w, dict) else getattr(w, "word", "")).lower()
         for w in transcript_words
@@ -206,7 +233,8 @@ def classify_video_profile(transcript_words: List[Any],
     }
     comedy_keywords = {
         "joke", "comedy", "laugh", "standup", "audience", "applause", "hilarious",
-        "comedian", "crowd", "punchline", "funny", "stage", "roast"
+        "comedian", "crowd", "punchline", "funny", "stage", "roast", "hasna", "haso",
+        "chutkula", "mazaak", "stand-up", "comic", "clapping"
     }
     game_keywords = {
         "gameplay", "fps", "boss", "level", "multiplayer", "loot", "respawn", "quest",
@@ -900,6 +928,17 @@ class EditorialEngine:
                         best = min(eligible_payoffs, key=lambda x: abs(x[1] - target_raw_end))
                         snapped_end = best[1] + 0.10
 
+                    # Comedic Laughter / Crowd Roar Payoff Extension for STAGE_PERFORMANCE:
+                    # Let the punchline breathe into the audience laughter rather than cutting off immediately.
+                    is_stage_perf = "STAGE_PERFORMANCE" in os.getenv("AETHER_CONTENT_PROFILE", "").upper()
+                    if is_stage_perf and words_seq:
+                        subsequent_words = [w for w in words_seq if w[0] > best[1]]
+                        next_speech_start = subsequent_words[0][0] if subsequent_words else max_allowed_end
+                        speech_pause = next_speech_start - best[1]
+                        if speech_pause >= 1.0:
+                            laughter_padding = min(2.5, speech_pause - 0.3)
+                            snapped_end = min(max_allowed_end, best[1] + max(0.15, laughter_padding))
+
                     c.duration_seconds = round(min(max_dur, snapped_end - c.start_time_seconds), 2)
                     c.payoff_snapped = True
 
@@ -1370,7 +1409,8 @@ class EditorialEngine:
             transcript_words=transcript_words,
             spatial_events=spatial_events,
             video_duration=video_duration,
-            scene_changes=scene_changes
+            scene_changes=scene_changes,
+            source_path=video_path
         )
         logger.info(f"Classified Universal Video Content Profile: {content_profile.value}")
 

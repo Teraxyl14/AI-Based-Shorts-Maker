@@ -307,6 +307,7 @@ class Orchestrator:
                 "spatial_events": spatial_data,
                 "scene_changes": scene_data,
                 "transcript_beats": transcript_beats,
+                "content_profile": os.getenv("AETHER_CONTENT_PROFILE", "GENERAL_VIDEO"),
             }
 
             # Durable artifact persistence: write Phase 1 & 2 outputs so downstream re-renders never lose data
@@ -400,16 +401,20 @@ class Orchestrator:
                                   existing: Optional[List[Dict[str, Any]]] = None,
                                   needed: int = 4,
                                   source_path: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Generates fallback editorial shorts to guarantee at least `needed` shorts (50.0s-60.0s each),
+        """Generates fallback editorial shorts to guarantee at least `needed` shorts (30.0s-60.0s each),
         strictly avoiding previously extracted intervals for multi-batch continuity.
         """
         existing = existing or []
         shorts = []
         start = 60.0
         avail_end = max(start, video_duration - 1.0)
-        target_dur = 55.0 if (avail_end - start) >= (needed * 55.0) else max(50.0, min(60.0, (avail_end - start) / float(max(1, needed))))
-        slots = max(needed * 2, int((avail_end - start) / target_dur))
-        step = (avail_end - start - target_dur) / max(1, slots - 1) if slots > 1 else 0.0
+        total_avail = avail_end - start
+
+        if total_avail < 30.0 or needed <= 0:
+            return []
+
+        step = total_avail / float(needed)
+        target_dur = max(30.0, min(50.0, step - 1.0 if step > 31.0 else step))
 
         excluded_intervals = get_excluded_intervals(source_path) if source_path else []
 
@@ -421,16 +426,25 @@ class Orchestrator:
                     return True
             return False
 
-        for step_idx in range(slots + 1):
-            if len(shorts) >= needed:
-                break
-            s_start = start + step_idx * step
-            s_end = s_start + target_dur
-            if s_end > avail_end:
-                s_end = avail_end
-                s_start = s_end - target_dur
-            if s_start < 60.0 or (s_end - s_start) < 50.0:
-                continue
+        # Partition timeline evenly across needed shorts
+        for i in range(needed):
+            s_start = start + i * step
+            s_end = min(avail_end, s_start + target_dur)
+            if s_end - s_start < 30.0:
+                s_start = max(60.0, s_end - target_dur)
+
+            # If collides, attempt micro-shifting within the slot partition
+            if collides(s_start, s_end):
+                alt_start = s_start + 5.0
+                alt_end = alt_start + target_dur
+                if alt_end <= avail_end and not collides(alt_start, alt_end):
+                    s_start, s_end = alt_start, alt_end
+                else:
+                    alt_start = max(60.0, s_start - 5.0)
+                    alt_end = alt_start + target_dur
+                    if not collides(alt_start, alt_end):
+                        s_start, s_end = alt_start, alt_end
+
             if not collides(s_start, s_end):
                 shorts.append({
                     "start_time_seconds": round(s_start, 2),

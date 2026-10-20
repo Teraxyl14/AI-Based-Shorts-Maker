@@ -253,12 +253,18 @@ class VisionSpoke:
             return 300.0, 30.0, 1920, 1080
 
     def detect_scene_changes(self, source_path: str, duration: float, fps: float) -> List[SceneChange]:
-        """Detects hard cuts and scene transitions using Kornia histogram differencing on GPU."""
+        """Detects hard cuts and scene transitions using 2D Spatial Block Color + Edge Differencing on GPU.
+
+        Dividing frames into a 3x3 grid (9 spatial blocks) with multi-channel color
+        histograms and spatial edge gradients requires multi-block structural discontinuity
+        (>= 5/9 blocks), effectively ignoring uniform stage lighting washes while accurately
+        catching true camera angle switches and cuts.
+        """
         import torch
-        import kornia
+        import numpy as np
 
         scene_changes = []
-        logger.info("Running Kornia scene-change detection...")
+        logger.info("Running 2D Spatial Block HSV + Edge scene-change detection...")
         t0 = time.perf_counter()
 
         try:
@@ -285,7 +291,7 @@ class VisionSpoke:
             )
 
             frame_size = 320 * 180 * 3
-            prev_hist = None
+            prev_descriptors = None
             frame_idx = 0
 
             while True:
@@ -297,29 +303,64 @@ class VisionSpoke:
                 frame_tensor = torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(1, 180, 320, 3)
                 frame_tensor = frame_tensor.permute(0, 3, 1, 2).float().to(self.device) / 255.0
 
-                # Compute grayscale histogram using Kornia
-                gray = kornia.color.rgb_to_grayscale(frame_tensor)
-                # Flatten to 1D and compute histogram manually via torch
-                hist = torch.histc(gray, bins=64, min=0.0, max=1.0)
-                hist = hist / (hist.sum() + 1e-8)  # Normalize
+                # 1. Decompose frame into 3x3 grid (9 spatial blocks: 60x106 each)
+                h_splits = torch.tensor_split(frame_tensor, 3, dim=2)
+                block_descriptors = []
 
-                if prev_hist is not None:
-                    # Chi-squared distance between histograms
-                    diff = torch.sum((hist - prev_hist) ** 2 / (hist + prev_hist + 1e-8))
-                    diff_val = diff.item()
+                for h_chunk in h_splits:
+                    w_splits = torch.tensor_split(h_chunk, 3, dim=3)
+                    for b in w_splits:
+                        # 3-channel color histogram (16 bins per channel)
+                        r_hist = torch.histc(b[:, 0], bins=16, min=0.0, max=1.0)
+                        g_hist = torch.histc(b[:, 1], bins=16, min=0.0, max=1.0)
+                        b_hist = torch.histc(b[:, 2], bins=16, min=0.0, max=1.0)
+                        c_hist = torch.cat([r_hist, g_hist, b_hist])
+                        c_hist = c_hist / (c_hist.sum() + 1e-8)
 
-                    if diff_val > SCENE_CHANGE_THRESHOLD:
+                        # Spatial high-frequency edge energy
+                        dx = torch.abs(b[:, :, :, 1:] - b[:, :, :, :-1])
+                        dy = torch.abs(b[:, :, 1:, :] - b[:, :, :-1, :])
+                        edge_energy = float((dx.mean() + dy.mean()).item())
+
+                        block_descriptors.append((c_hist, edge_energy))
+
+                if prev_descriptors is not None:
+                    block_diffs = []
+                    for i in range(9):
+                        prev_c, prev_e = prev_descriptors[i]
+                        curr_c, curr_e = block_descriptors[i]
+
+                        # Chi-squared color distance
+                        c_diff = 0.5 * torch.sum((curr_c - prev_c) ** 2 / (curr_c + prev_c + 1e-8)).item()
+                        # Relative edge structural change
+                        e_diff = abs(curr_e - prev_e) / (max(curr_e, prev_e) + 1e-4)
+
+                        # Combined block discontinuity metric
+                        d_i = 0.60 * c_diff + 0.40 * e_diff
+                        block_diffs.append(d_i)
+
+                    # Discontinuous block count (structural change across independent spatial zones)
+                    discontinuous_blocks = sum(1 for d in block_diffs if d >= 0.28)
+                    mean_diff = sum(block_diffs) / 9.0
+
+                    # Uniform wash detection (ambient stage lighting changes uniformly shift all blocks)
+                    diff_variance = float(np.var(block_diffs)) if len(block_diffs) > 1 else 0.0
+                    is_uniform_lighting_wash = (diff_variance < 0.003 and discontinuous_blocks < 7 and mean_diff < 0.45)
+
+                    # A true camera cut causes sharp structural discontinuity across >= 5 blocks
+                    # without being an ambient uniform light wash
+                    if (discontinuous_blocks >= 5 and mean_diff >= 0.30 and not is_uniform_lighting_wash) or mean_diff >= 0.60:
                         timestamp = frame_idx / sample_fps
                         src_frame = int(timestamp * fps)
-                        change_type = "hard_cut" if diff_val > 0.6 else "dissolve"
+                        change_type = "hard_cut" if (discontinuous_blocks >= 6 and mean_diff > 0.48) else "dissolve"
                         scene_changes.append(SceneChange(
                             timestamp=timestamp,
-                            confidence=min(1.0, diff_val),
+                            confidence=min(1.0, mean_diff),
                             frame_idx=src_frame,
                             change_type=change_type
                         ))
 
-                prev_hist = hist
+                prev_descriptors = block_descriptors
                 frame_idx += 1
 
             proc.wait()
@@ -500,13 +541,16 @@ class VisionSpoke:
                     associate_hand_object_proximity(frame_events)
 
                 # Synthetic demonstration ROI fallback if gestures indicate active demo but no COCO object detected
-                for p_ev in [e for e in frame_events if e.label == "person"]:
-                    existing_objs = [e for e in frame_events if e.label != "person"]
-                    synth_roi = generate_synthetic_demonstration_roi(p_ev, existing_objs)
-                    if synth_roi is not None:
-                        frame_events.append(synth_roi)
-                        spatial_events.append(synth_roi)
-                        detected = True
+                # Gated: Disabled for STAGE_PERFORMANCE (stand-up comedy, monologues)
+                is_stage_perf = "STAGE_PERFORMANCE" in os.getenv("AETHER_CONTENT_PROFILE", "").upper()
+                if not is_stage_perf:
+                    for p_ev in [e for e in frame_events if e.label == "person"]:
+                        existing_objs = [e for e in frame_events if e.label != "person"]
+                        synth_roi = generate_synthetic_demonstration_roi(p_ev, existing_objs)
+                        if synth_roi is not None:
+                            frame_events.append(synth_roi)
+                            spatial_events.append(synth_roi)
+                            detected = True
 
                 # Tier 3: Spectral Residual Saliency (Kornia fallback)
                 if not detected:

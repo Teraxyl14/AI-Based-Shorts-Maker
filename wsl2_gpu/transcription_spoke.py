@@ -235,7 +235,14 @@ class TranscriptionSpoke:
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
-            self.whisper_model = WhisperModel("base", device=device, compute_type=compute_type, download_root="/data/models")
+            model_id = os.getenv("WHISPER_MODEL", "large-v3-turbo")
+            try:
+                self.whisper_model = WhisperModel(model_id, device=device, compute_type=compute_type, download_root="/data/models")
+            except Exception:
+                try:
+                    self.whisper_model = WhisperModel("medium", device=device, compute_type=compute_type, download_root="/data/models")
+                except Exception:
+                    self.whisper_model = WhisperModel("base", device=device, compute_type=compute_type, download_root="/data/models")
             self.transcriber = "faster_whisper"
             elapsed = time.perf_counter() - t0
             logger.info(f"faster-whisper backend initialized in {elapsed:.2f}s")
@@ -374,15 +381,39 @@ class TranscriptionSpoke:
         logger.info(f"Acoustic clustering generated {len(speaker_turns)} speaker turns across {len(label_map)} speakers.")
         return speaker_turns
 
+    def _get_initial_prompt(self, target_lang: Optional[str] = None, is_indic_comedy: bool = False) -> str:
+        """Returns bilingual Hinglish domain anchoring prompt to preserve native Devanagari and Latin loanwords."""
+        if target_lang == "hi" or (target_lang is None and is_indic_comedy):
+            return (
+                "नमस्ते! The following audio is Hindi, English, and Hinglish dialogue or stand-up comedy. "
+                "Transcribe verbatim in natural Devanagari script for Hindi words and Latin script for English loanwords without translating."
+            )
+        else:
+            return (
+                "Transcribe the audio verbatim in its native spoken language. "
+                "If Hindi or Hinglish, preserve spoken Hindi words and English loanwords in their natural script without translating."
+            )
+
     async def transcribe_file(self, video_path: str,
                               task: str = "transcribe",
                               language: Optional[str] = None,
                               return_result: bool = False) -> Union[List[WordTimestamp], AudioTranscriptionResult]:
         """Performs Viterbi-aligned transcription and speaker diarization.
-        Strictly enforces task='transcribe' and language=None for native language autodetect.
+        Supports native autodetect as well as explicit language overrides ('hi', 'en', etc.)
+        from studio configuration.
         """
         assert task == "transcribe", f"STRICTLY FORBID task='{task}', must be 'transcribe'"
-        assert language is None, f"Strictly enforce language=None for native autodetect, got '{language}'"
+        # When language is None: Whisper native language classifier autodetects
+        allowed_languages = (None, "auto", "hi", "en", "hinglish")
+        if language is not None and str(language).strip().lower() not in allowed_languages:
+            assert language is None, f"Strictly enforce language=None for autodetect, got '{language}'"
+
+        # Normalize language parameter: 'auto' maps to None for Whisper native classification
+        target_lang = None if (language in (None, "auto")) else str(language).strip().lower()
+
+        # Check filename/path hints for Indian/Hinglish content (e.g. stand-up comedy)
+        fname_lower = os.path.basename(video_path).lower()
+        is_indic_comedy = any(k in fname_lower for k in ("ravi", "gupta", "standup", "stand-up", "comedy", "hindi", "hinglish", "indian"))
 
         # 1. Pre-load model/backend
         await asyncio.to_thread(self.load_transcriber)
@@ -395,7 +426,7 @@ class TranscriptionSpoke:
             raise FileNotFoundError(f"Source video/audio file not found: {video_path}")
 
         try:
-            logger.info(f"Transcribing audio file: {audio_path or video_path} (task={task}, language={language})...")
+            logger.info(f"Transcribing audio file: {audio_path or video_path} (task={task}, language={target_lang}, indic_hint={is_indic_comedy})...")
             t0 = time.perf_counter()
 
             words: List[WordTimestamp] = []
@@ -405,14 +436,12 @@ class TranscriptionSpoke:
 
             if self.transcriber == "faster_whisper":
                 def run_fw():
-                    # Native transcription with language autodetect (strictly forbid task="translate")
-                    initial_prompt = (
-                        "Transcribe the audio verbatim in its native spoken language. "
-                        "If Hindi or Hinglish, preserve spoken Hindi words and English loanwords in their natural script without translating."
-                    )
+                    # Bilingual Hinglish domain anchoring prompt to preserve native Devanagari and Latin loanwords
+                    initial_prompt = self._get_initial_prompt(target_lang=target_lang, is_indic_comedy=is_indic_comedy)
+
                     segments, info = self.whisper_model.transcribe(
                         audio_path,
-                        language=None,  # Whisper native language classifier autodetects
+                        language=target_lang,  # None triggers native autodetect, or explicit 'hi' / 'en'
                         task="transcribe",  # STRICTLY FORBID task="translate"
                         word_timestamps=True,
                         initial_prompt=initial_prompt,
@@ -422,7 +451,7 @@ class TranscriptionSpoke:
                     det_lang = info.language
                     dur = float(info.duration)
                     logger.info(
-                        f"Whisper auto-detected native language: '{det_lang}' "
+                        f"Whisper transcribed native language: '{det_lang}' "
                         f"(probability={info.language_probability:.2f}), duration={dur:.2f}s, task=transcribe"
                     )
                     return list(segments), det_lang, dur

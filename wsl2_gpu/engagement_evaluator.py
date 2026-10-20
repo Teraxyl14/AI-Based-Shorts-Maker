@@ -18,6 +18,7 @@ Evaluates visual retention dynamics before final export:
      * Sets self_correction_applied = True and populates remedial_actions.
 """
 
+import os
 import math
 import logging
 from typing import List, Tuple, Optional, Dict, Any
@@ -84,11 +85,13 @@ class EngagementEvaluator:
         alignment_threshold: float = TOPIC_ALIGNMENT_THRESHOLD,
         score_threshold: float = OVERALL_ENGAGEMENT_THRESHOLD,
         target_crop_duration: float = DEFAULT_TOPIC_CROP_DURATION,
+        content_profile: Optional[Any] = None,
     ):
         self.pacing_threshold = pacing_threshold
         self.alignment_threshold = alignment_threshold
         self.score_threshold = score_threshold
         self.target_crop_duration = target_crop_duration
+        self.content_profile = content_profile
 
     # ─── Pacing Violation Detection ──────────────────────────────────────────
 
@@ -267,6 +270,7 @@ class EngagementEvaluator:
         spatial_events: List[Any],
         transcript_beats: Optional[List[Any]] = None,
         total_duration: Optional[float] = None,
+        content_profile: Optional[Any] = None,
     ) -> Tuple[
         EngagementEvaluationReport,
         List[VideoSegment],
@@ -279,6 +283,20 @@ class EngagementEvaluator:
         Returns:
             Tuple[report, corrected_segments, editorial_cuts, focal_targets]
         """
+        active_prof = (
+            content_profile or
+            getattr(self, "content_profile", None) or
+            (short_dict_or_candidate.get("content_profile") if isinstance(short_dict_or_candidate, dict) else getattr(short_dict_or_candidate, "content_profile", None)) or
+            os.getenv("AETHER_CONTENT_PROFILE", "")
+        )
+        is_stage_performance = False
+        is_podcast = False
+        if active_prof:
+            prof_str = str(getattr(active_prof, "value", active_prof)).upper()
+            if "STAGE_PERFORMANCE" in prof_str:
+                is_stage_performance = True
+            elif "PODCAST" in prof_str or "CONVERSATIONAL" in prof_str:
+                is_podcast = True
         start_t, end_t, dur, short_id, raw_segs, raw_beats = self._parse_short_input(
             short_dict_or_candidate, total_duration
         )
@@ -349,7 +367,7 @@ class EngagementEvaluator:
                 remedial_actions=[],
                 self_correction_applied=False,
             )
-            editorial_cuts = self._compute_editorial_cuts(segments, start_t)
+            editorial_cuts = self._compute_editorial_cuts(segments, start_t, is_podcast=is_podcast)
             focal_targets = self._compute_focal_targets(segments, start_t, relevant_beats, spatial_events)
             return report, segments, editorial_cuts, focal_targets
 
@@ -380,7 +398,8 @@ class EngagementEvaluator:
                 spatial_events=spatial_events,
                 remedial_actions=remedial_actions,
                 clip_start=start_t,
-                clip_end=end_t
+                clip_end=end_t,
+                is_stage_performance=is_stage_performance,
             )
 
         # Post-correction evaluation
@@ -409,7 +428,7 @@ class EngagementEvaluator:
             self_correction_applied=True,
         )
 
-        editorial_cuts = self._compute_editorial_cuts(corrected_segments, start_t)
+        editorial_cuts = self._compute_editorial_cuts(corrected_segments, start_t, is_podcast=is_podcast)
         focal_targets = self._compute_focal_targets(corrected_segments, start_t, relevant_beats, spatial_events)
 
         logger.info(
@@ -430,10 +449,12 @@ class EngagementEvaluator:
         remedial_actions: List[RemedialAction],
         clip_start: float,
         clip_end: float,
+        is_stage_performance: bool = False,
     ) -> List[VideoSegment]:
         """Splits monotonous segments (> 7.0s) into alternating cuts, inserting
         a 3.0s FULL_FRAME_TOPIC_CLOSEUP or DUAL_PANE_SPLIT_SCREEN and restoring
         FULL_FRAME_SPEAKER_TIGHT.
+        Strictly prohibits split-screen for STAGE_PERFORMANCE (stand-up comedy, monologues).
         """
         out_segments: List[VideoSegment] = []
         sorted_beats = sorted(demo_beats, key=lambda b: float(self._get_beat_attr(b, "start_time", 0.0)))
@@ -475,7 +496,7 @@ class EngagementEvaluator:
 
                 # Verify genuine visual separation between speaker and topic (avoid duplicate identical panes)
                 bbox_distance = math.hypot(spk_bbox[0] - topic_bbox[0], spk_bbox[1] - topic_bbox[1])
-                is_distinct_topic = (has_topic and bbox_distance >= 0.30)
+                is_distinct_topic = (has_topic and bbox_distance >= 0.30 and not is_stage_performance)
 
                 # Selective split-screen accent: prevent continuous overuse across whole clip
                 recent_split_count = sum(1 for seg in out_segments[-3:] if getattr(seg, 'layout_mode', '') == CutLayoutMode.DUAL_PANE_SPLIT_SCREEN)
@@ -487,7 +508,14 @@ class EngagementEvaluator:
                     or any(kw in b_summary.lower() for kw in ("screen", "monitor", "desktop", "browser", "windows", "app", "ui", "display", "notepad", "dialog"))
                 )
 
-                if has_speaker and is_distinct_topic and recent_split_count < 1:
+                if is_stage_performance:
+                    # STRICT PROHIBITION: Stand-up comedy / solo stage performance must NEVER split screen.
+                    # Comedians pacing on stage remain in FULL_FRAME_SPEAKER_TIGHT or CINEMATIC_3ZONE_916.
+                    mode = CutLayoutMode.FULL_FRAME_SPEAKER_TIGHT
+                    cfg = None
+                    action_type = "SPLIT_SEGMENT"
+                    seg_focal_target = "SPEAKER_PRIMARY"
+                elif has_speaker and is_distinct_topic and recent_split_count < 1:
                     mode = CutLayoutMode.DUAL_PANE_SPLIT_SCREEN
                     cfg = SplitScreenConfig(
                         top_pane_target="SPEAKER",
@@ -795,13 +823,18 @@ class EngagementEvaluator:
 
         return has_speaker, has_topic, speaker_bbox, topic_bbox
 
-    def _compute_editorial_cuts(self, segments: List[VideoSegment], clip_start: float) -> List[float]:
-        """Calculates relative editorial cut timestamps in seconds from short start."""
+    def _compute_editorial_cuts(self, segments: List[VideoSegment], clip_start: float, is_podcast: bool = False) -> List[float]:
+        """Calculates relative editorial cut timestamps in seconds from short start.
+
+        For CONVERSATIONAL_PODCAST, applies an anticipatory 0.6s lead-in (J-Cut) so the
+        camera cuts to the listener/next speaker slightly before their dialogue starts.
+        """
         if len(segments) <= 1:
             return []
         cuts = []
+        lead_in = 0.60 if is_podcast else 0.0
         for s in segments[1:]:
-            rel_t = max(0.0, s.segment_start - clip_start)
+            rel_t = max(0.0, (s.segment_start - clip_start) - lead_in)
             cuts.append(round(rel_t, 3))
         return cuts
 
