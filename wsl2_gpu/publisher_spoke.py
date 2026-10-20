@@ -15,7 +15,7 @@ import json
 import time
 import logging
 import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union, Tuple
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("AetherPublisherSpoke")
@@ -86,6 +86,133 @@ def calculate_next_scheduled_drop(base_time: Optional[datetime.datetime] = None)
     return datetime.datetime(tomorrow.year, tomorrow.month, tomorrow.day, h, m)
 
 
+MAX_TITLE_LENGTH = 100
+MAX_DESCRIPTION_LENGTH = 5000
+MAX_TAGS_LENGTH = 450
+MAX_TAGS_COUNT = 30
+
+
+def remove_control_characters(s: str) -> str:
+    """Removes non-printable ASCII control characters while preserving valid formatting."""
+    return "".join(ch for ch in str(s or "") if ord(ch) > 31 and ord(ch) != 127 or ch in ("\n", "\r", "\t"))
+
+
+def normalize_tags(raw_tags: Union[List[str], str]) -> List[str]:
+    """
+    Normalizes, sanitizes, and deduplicates YouTube tags.
+    Strips leading '#', removes quotes, and enforces YouTube's 450-byte total limit.
+    """
+    if isinstance(raw_tags, str):
+        candidates = [t.strip() for t in raw_tags.split(",") if t.strip()]
+    else:
+        candidates = list(raw_tags or [])
+
+    unique_tags: List[str] = []
+    seen: set = set()
+    total_len = 0
+
+    for item in candidates:
+        cleaned = remove_control_characters(item).strip().lstrip("#").replace('"', '')
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+
+        next_len = total_len + len(cleaned) + (1 if unique_tags else 0)
+        if next_len > MAX_TAGS_LENGTH or len(unique_tags) >= MAX_TAGS_COUNT:
+            break
+
+        unique_tags.append(cleaned[:100])
+        seen.add(key)
+        total_len = next_len
+
+    return unique_tags
+
+
+def normalize_and_validate_metadata(seo: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Ensures complete compliance with YouTube Data API v3 metadata specifications.
+    Guarantees title <= 100 chars, description <= 5000 chars, tags <= 450 bytes.
+    """
+    warnings: List[str] = []
+    raw_title = remove_control_characters(seo.get("title", "")).strip()
+    if len(raw_title) > MAX_TITLE_LENGTH:
+        warnings.append(f"Title exceeded {MAX_TITLE_LENGTH} chars; truncated.")
+        raw_title = raw_title[:MAX_TITLE_LENGTH - 3].rstrip() + "..."
+
+    raw_desc = remove_control_characters(seo.get("description", "")).strip()
+    if len(raw_desc) > MAX_DESCRIPTION_LENGTH:
+        warnings.append(f"Description exceeded {MAX_DESCRIPTION_LENGTH} chars; truncated.")
+        raw_desc = raw_desc[:MAX_DESCRIPTION_LENGTH].rstrip()
+
+    tags = normalize_tags(seo.get("tags", []))
+    if len(tags) < 3:
+        warnings.append("Fewer than 3 tags remain after normalization.")
+
+    cat_id = str(seo.get("category_id", "24")).strip()
+    if not cat_id.isdigit():
+        cat_id = "24"
+
+    sanitized = {
+        "title": raw_title or "Cinematic Short #shorts",
+        "description": raw_desc,
+        "tags": tags,
+        "category_id": cat_id,
+        "default_language": "en",
+        "default_audio_language": "en"
+    }
+    return sanitized, warnings
+
+
+def add_video_to_playlist(youtube: Any, video_id: str, playlist_id: str) -> bool:
+    """
+    Assigns an uploaded video to a specified playlist using YouTube Data API v3.
+    Consumes ~50 quota units.
+    """
+    try:
+        body = {
+            "snippet": {
+                "playlistId": playlist_id,
+                "resourceId": {
+                    "kind": "youtube#video",
+                    "videoId": video_id
+                }
+            }
+        }
+        youtube.playlistItems().insert(part="snippet", body=body).execute()
+        logger.info(f"🎉 Successfully added video {video_id} to playlist {playlist_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not add video {video_id} to playlist {playlist_id}: {e}")
+        return False
+
+
+def attach_captions(youtube: Any, video_id: str, srt_path: str, language: str = "en") -> bool:
+    """
+    Uploads an .srt caption track directly to a YouTube video.
+    """
+    if not srt_path or not os.path.exists(srt_path):
+        return False
+    try:
+        from googleapiclient.http import MediaFileUpload
+        caption_body = {
+            "snippet": {
+                "videoId": video_id,
+                "language": language,
+                "name": f"{language.upper()} Captions",
+                "isDraft": False
+            }
+        }
+        media = MediaFileUpload(srt_path, mimetype="application/x-subrip")
+        youtube.captions().insert(part="snippet", body=caption_body, media_body=media).execute()
+        logger.info(f"Subtitles from {srt_path} attached to video {video_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not attach captions for {video_id}: {e}")
+        return False
+
+
 def generate_viral_seo_metadata(raw_title: str,
                                  summary: str = "",
                                  is_cc: bool = False,
@@ -113,23 +240,30 @@ def generate_viral_seo_metadata(raw_title: str,
     if is_cc:
         desc_lines.append(f"\nSource Attribution (CC-BY): {uploader}")
 
-    return {
-        "title": hook_title[:100],
+    raw_payload = {
+        "title": hook_title,
         "description": "\n".join(desc_lines),
         "tags": tags,
         "category_id": "24",  # Entertainment
     }
+    sanitized, warnings = normalize_and_validate_metadata(raw_payload)
+    sanitized["validation_warnings"] = warnings
+    return sanitized
 
 
 def generate_syndication_package(raw_title: str,
                                  summary: str = "",
                                  is_cc: bool = False,
-                                 uploader: str = "Original Creator") -> Dict[str, Any]:
+                                 uploader: str = "Original Creator",
+                                 playlist_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Generates tailored, multi-platform publishing metadata for YouTube Shorts,
     TikTok Content Posting API, and Instagram Reels Graph API.
     """
     yt = generate_viral_seo_metadata(raw_title, summary, is_cc, uploader)
+    if playlist_id:
+        yt["playlist_id"] = playlist_id
+    yt["contains_synthetic_media"] = True
 
     clean_title = raw_title.replace("Viral Arc", "").strip(" :-,")
     if len(clean_title) > 40:
@@ -160,7 +294,8 @@ def generate_syndication_package(raw_title: str,
         "instagram_reels": {
             "caption": ig_caption,
             "share_to_feed": True,
-        }
+        },
+        "validation_warnings": yt.get("validation_warnings", [])
     }
 
 
@@ -168,12 +303,20 @@ def publish_short(video_path: str,
                   raw_title: str = "Cinematic Short",
                   summary: str = "",
                   thumbnail_path: Optional[str] = None,
+                  srt_path: Optional[str] = None,
+                  playlist_id: Optional[str] = None,
                   is_cc: bool = False,
                   uploader: str = "Original Creator",
-                  privacy_status: str = "private") -> Dict[str, Any]:
+                  privacy_status: str = "private",
+                  notify_subscribers: bool = True) -> Dict[str, Any]:
     """
-    Publishes or schedules a certified 9:16 short to YouTube.
-    If credentials are not yet configured, cleanly executes in Dry-Run mode.
+    Publishes or schedules a certified 9:16 short to YouTube with enterprise-grade safeguards:
+    - Metadata sanitization (length caps, tag normalization)
+    - Mandatory synthetic media disclosure (containsSyntheticMedia: True)
+    - Automatic playlist assignment
+    - Caption (.srt) upload
+    - Upload outcome reconciliation state tracking
+    - Daily quota budgeting
     """
     if not os.path.exists(video_path):
         return {"status": "error", "error": f"Video file not found: {video_path}"}
@@ -196,7 +339,7 @@ def publish_short(video_path: str,
     sched_dt = calculate_next_scheduled_drop()
     sched_iso = sched_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Generate viral metadata
+    # Generate and sanitize viral metadata
     seo = generate_viral_seo_metadata(raw_title, summary, is_cc, uploader)
 
     # Check for OAuth credentials
@@ -217,14 +360,19 @@ def publish_short(video_path: str,
             "privacy_status": privacy_status,
             "video_path": video_path,
             "thumbnail_path": thumbnail_path if thumbnail_path and os.path.exists(thumbnail_path) else None,
+            "srt_path": srt_path if srt_path and os.path.exists(srt_path) else None,
+            "playlist_id": playlist_id,
+            "contains_synthetic_media": True,
+            "notify_subscribers": notify_subscribers,
             "quota_units_used": UNITS_PER_UPLOAD,
+            "validation_warnings": seo.get("validation_warnings", []),
             "timestamp": time.time(),
             "note": "Credentials pending in data/auth/. Verified ready for live API publishing."
         }
         record_publication(result)
         return result
 
-    # Live API Publishing Flow
+    # Live API Publishing Flow with Resilient Safeguards
     try:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
@@ -241,17 +389,25 @@ def publish_short(video_path: str,
                 "title": seo["title"],
                 "description": seo["description"],
                 "tags": seo["tags"],
-                "categoryId": seo["category_id"]
+                "categoryId": seo["category_id"],
+                "defaultLanguage": seo.get("default_language", "en"),
+                "defaultAudioLanguage": seo.get("default_audio_language", "en")
             },
             "status": {
                 "privacyStatus": privacy_status,
                 "publishAt": sched_iso,
-                "selfDeclaredMadeForKids": False
+                "selfDeclaredMadeForKids": False,
+                "containsSyntheticMedia": True
             }
         }
 
         media = MediaFileUpload(video_path, chunksize=1024 * 1024, resumable=True)
-        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body=body,
+            media_body=media,
+            notifySubscribers=notify_subscribers
+        )
         response = None
         while response is None:
             status, response = request.next_chunk()
@@ -270,6 +426,14 @@ def publish_short(video_path: str,
             except Exception as e:
                 logger.warning(f"Could not upload thumbnail: {e}")
 
+        # Attach subtitles (.srt) if provided
+        if srt_path and os.path.exists(srt_path) and video_id:
+            attach_captions(youtube, video_id, srt_path)
+
+        # Add to target playlist if specified
+        if playlist_id and video_id:
+            add_video_to_playlist(youtube, video_id, playlist_id)
+
         result = {
             "status": "success",
             "mode": "live",
@@ -279,14 +443,36 @@ def publish_short(video_path: str,
             "privacy_status": privacy_status,
             "video_path": video_path,
             "thumbnail_path": thumbnail_path,
+            "srt_path": srt_path,
+            "playlist_id": playlist_id,
+            "contains_synthetic_media": True,
+            "notify_subscribers": notify_subscribers,
             "quota_units_used": UNITS_PER_UPLOAD,
+            "validation_warnings": seo.get("validation_warnings", []),
             "timestamp": time.time()
         }
         record_publication(result)
         return result
 
     except Exception as e:
-        logger.error(f"Live YouTube upload failed: {e}")
+        logger.error(f"Live YouTube upload interrupted or failed: {e}")
+        # Record reconciliation guard state so duplicate retry does not occur without channel inspection
+        reconcile_record = {
+            "status": "reconciliation_required",
+            "mode": "error",
+            "title": seo["title"],
+            "video_path": video_path,
+            "error": str(e),
+            "timestamp": time.time()
+        }
+        record_publication(reconcile_record)
+        return {
+            "status": "error",
+            "error": str(e),
+            "reconciliation_required": True,
+            "message": "Upload state uncertain; channel reconciliation recorded before retry."
+        }
+
         return {"status": "error", "error": str(e)}
 
 

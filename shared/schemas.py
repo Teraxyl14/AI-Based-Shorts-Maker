@@ -420,3 +420,28 @@ class PipelineState(BaseModel):
     current_stage: str = Field(default="ingest")
     error_log: Annotated[List[str], operator.add] = Field(default_factory=list)
     pipeline_complete: bool = Field(default=False)
+
+
+# ─── Phase 4: Syndication & Publishing Schemas ──────────────────────────────
+
+class YouTubeUploadMetadata(BaseModel):
+    """Normalized, policy-compliant YouTube Data API v3 publishing payload."""
+    title: str = Field(..., max_length=100, description="Cleaned viral SEO title (<= 100 chars)")
+    description: str = Field(default="", max_length=5000, description="Formatted description with attribution and hashtags")
+    tags: List[str] = Field(default_factory=list, description="Validated tags, max 30 items and <= 450 bytes")
+    category_id: str = Field(default="24", description="Numeric YouTube Category ID (24 = Entertainment)")
+    privacy_status: Literal["private", "unlisted", "public"] = Field(default="private")
+    playlist_id: Optional[str] = Field(default=None, description="Optional target YouTube Playlist ID for automated organization")
+    notify_subscribers: bool = Field(default=True, description="Whether to notify subscribers upon release")
+    contains_synthetic_media: bool = Field(default=True, description="YouTube mandatory disclosure for AI/synthetic content")
+    default_language: str = Field(default="en")
+    default_audio_language: str = Field(default="en")
+
+
+class SyndicationPackage(BaseModel):
+    """Multi-platform distribution bundle spanning YouTube Shorts, TikTok, and Instagram Reels."""
+    youtube: YouTubeUploadMetadata
+    tiktok: Dict[str, Any] = Field(default_factory=dict)
+    instagram_reels: Dict[str, Any] = Field(default_factory=dict)
+    validation_warnings: List[str] = Field(default_factory=list)
+

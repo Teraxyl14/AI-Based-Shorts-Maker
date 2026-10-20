@@ -487,7 +487,8 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                 from wsl2_gpu.publisher_spoke import generate_syndication_package
                 q_params = parse_qs(parsed.query)
                 title = q_params.get("title", ["Cinematic Short"])[0]
-                pkg = generate_syndication_package(raw_title=title)
+                playlist_id = q_params.get("playlist_id", [None])[0]
+                pkg = generate_syndication_package(raw_title=title, playlist_id=playlist_id)
                 self._send_json({"status": "success", "package": pkg})
             except Exception as e:
                 self._send_json({"status": "error", "error": str(e)}, 500)
@@ -749,13 +750,23 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                 vid_path = data.get("video_path")
                 title = data.get("title", "Cinematic Short")
                 thumb = data.get("thumbnail_path")
+                srt = data.get("srt_path")
+                playlist = data.get("playlist_id")
+                notify = data.get("notify_subscribers", True)
 
                 if not vid_path or not os.path.exists(vid_path):
                     self._send_json({"status": "error", "error": f"Video file not found: {vid_path}"}, 404)
                     return
 
                 from wsl2_gpu.publisher_spoke import publish_short
-                pub_res = publish_short(vid_path, raw_title=title, thumbnail_path=thumb)
+                pub_res = publish_short(
+                    vid_path,
+                    raw_title=title,
+                    thumbnail_path=thumb,
+                    srt_path=srt,
+                    playlist_id=playlist,
+                    notify_subscribers=notify
+                )
 
                 # Remove from review queue if present
                 q_file = os.path.join(DATA_DIR, "review_queue.json")

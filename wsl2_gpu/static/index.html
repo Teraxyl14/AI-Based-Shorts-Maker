@@ -688,6 +688,17 @@
         <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px;">Multi-Platform Syndication Packaging</h2>
         <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 18px;">Generated SEO metadata tailored for YouTube Shorts, TikTok FYP tags, and Instagram Reels descriptions.</p>
 
+        <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; background: var(--panel); border: 1px solid var(--border-subtle); padding: 12px 16px; border-radius: 10px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 280px;">
+            <span style="font-weight: 700; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Target Playlist ID:</span>
+            <input type="text" id="targetPlaylistId" placeholder="e.g. PLrAXtmErZgOdP_8GztsuKi9xEvEGyfXzZ (optional)" style="flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; color: var(--text); font-size: 12px;" class="mono">
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="badge" style="background: rgba(0, 240, 255, 0.1); color: var(--accent); font-size: 11px;">Auto-Routing</span>
+            <span class="badge" style="background: rgba(204, 255, 0, 0.1); color: var(--accent-lime); font-size: 11px;">Synthetic Media Guard Active</span>
+          </div>
+        </div>
+
         <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px;">
           <div style="display: flex; gap: 8px;">
             <button class="btn platform-tab-btn" id="tabYtBtn" style="border-color: var(--accent); color: var(--accent);" onclick="switchSyndicationPlatform('youtube')">YouTube Shorts</button>
@@ -1452,7 +1463,15 @@ Select a short in the Review Queue or Gallery to view its multi-platform packagi
       if (!currentSyndicationPkg) return;
       const el = document.getElementById("syndicationDisplay");
       if (activeSyndicationPlatform === "youtube") {
-        el.innerText = `[YOUTUBE SHORTS METADATA]\nTitle: ${currentSyndicationPkg.youtube.title}\n\nDescription:\n${currentSyndicationPkg.youtube.description}\n\nTags: ${currentSyndicationPkg.youtube.tags.join(", ")}`;
+        const warnings = currentSyndicationPkg.youtube.validation_warnings || currentSyndicationPkg.validation_warnings || [];
+        const warnText = warnings.length ? `\n\n⚠️ Compliance Warnings: ${warnings.join("; ")}` : "";
+        el.innerText = `[YOUTUBE SHORTS METADATA — ENTERPRISE COMPLIANT]\n` +
+          `Title (${currentSyndicationPkg.youtube.title.length}/100): ${currentSyndicationPkg.youtube.title}\n\n` +
+          `Description (${currentSyndicationPkg.youtube.description.length}/5000):\n${currentSyndicationPkg.youtube.description}\n\n` +
+          `Tags (${(currentSyndicationPkg.youtube.tags || []).length}/30): ${(currentSyndicationPkg.youtube.tags || []).join(", ")}\n\n` +
+          `Category: Entertainment (ID ${currentSyndicationPkg.youtube.category_id || 24})\n` +
+          `Synthetic Media: Mandatory AI Disclosure Attached (containsSyntheticMedia: true)` +
+          warnText;
       } else if (activeSyndicationPlatform === "tiktok") {
         el.innerText = `[TIKTOK FYP PACKAGING]\nCaption:\n${currentSyndicationPkg.tiktok.caption}`;
       } else if (activeSyndicationPlatform === "instagram") {
@@ -1588,11 +1607,17 @@ Select a short in the Review Queue or Gallery to view its multi-platform packagi
 
     async function publishItem(vpath, title) {
       showToast(`Dispatching publication to YouTube: ${title}`, "info");
+      const playlistInput = document.getElementById("targetPlaylistId");
+      const playlistId = playlistInput ? playlistInput.value.trim() : null;
       try {
         const res = await fetch("/api/publish", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video_path: vpath, title: title })
+          body: JSON.stringify({
+            video_path: vpath,
+            title: title,
+            playlist_id: playlistId || null
+          })
         });
         const d = await res.json();
         if (d.status === "error") {

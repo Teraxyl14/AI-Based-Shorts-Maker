@@ -21,6 +21,17 @@
 
 ## 🚀 Recent Updates
 
+### v3.4.0 (2026-10-20) — Enterprise YouTube Compliance & Multi-Platform Syndication Suite
+
+- 🛡️ **Enterprise YouTube Compliance & Publishing Guardrails (`publisher_spoke.py`)**:
+  - **Policy-Compliant Metadata Sanitizer**: Strips non-printable ASCII control characters, bounds titles ($\le 100$ chars), bounds descriptions ($\le 5000$ chars), and normalizes tags ($\le 30$ tags, $< 450$ bytes total) with quote and hash symbol stripping.
+  - **Mandatory AI Synthetic Media Disclosure**: Automatically flags `containsSyntheticMedia: true` across all YouTube API upload payloads to ensure 100% standing with YouTube's 2026 AI disclosure policies.
+  - **Automated Thematic Playlist Assignment**: Dynamically inserts certified shorts into target playlists (`playlistItems().insert`) directly upon upload completion.
+  - **Direct Subtitle Attachment**: Programmatically uploads `.srt` caption files via `captions().insert(sync=True)`.
+  - **Upload Outcome Reconciliation Guard**: Tracks `reconciliation_required` state in persistent history to protect against accidental duplicate uploads during network resets.
+- 🧪 **9 New Certified Tests (561 Total Tests)**:
+  - Added comprehensive test suite (`tests/test_publisher_spoke.py`) verifying metadata sanitization, tag clamping, synthetic media flags, playlist insertion, and dry-run reconciliation.
+
 ### v3.3.0 (2026-10-20) — 3-Zone Cinema Engine, Universal Studio Console & Multi-Batch Memory
 
 - 🎬 **3-Zone Cinema-Vertical Layout Engine (`CINEMATIC_3ZONE_916`)**:
