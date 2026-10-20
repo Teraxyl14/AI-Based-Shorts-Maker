@@ -8,13 +8,39 @@
 [![YOLO11-Pose](https://img.shields.io/badge/Vision-YOLO11--Pose_TRT-ffd43b.svg)](https://docs.ultralytics.com/)
 [![vLLM Brain](https://img.shields.io/badge/VLM-Qwen2.5--VL--7B_FP8-purple.svg)](https://vllm.ai/)
 [![OSQP Solver](https://img.shields.io/badge/Camera-OSQP_Convex_Optimizer-orange.svg)](https://osqp.org/)
-[![Tests](https://img.shields.io/badge/Tests-548%20Passed%20(100%25)-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-552%20Passed%20(100%25)-success.svg)](tests/)
+[![Compositor](https://img.shields.io/badge/Compositor-3--Zone%20Cinema%209%3A16-cyan.svg)](wsl2_gpu/render_spoke.py)
 [![NVENC Accelerated](https://img.shields.io/badge/Render-Hardware%20NVENC%20(15s)-blue.svg)](https://developer.nvidia.com/video-codec-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **An enterprise-grade, fully offline, edge-capable AI engine that transforms long-form horizontal video into viral, production-ready 9:16 vertical shorts with zero human intervention.**
 
 </div>
+
+---
+
+## 🚀 Recent Updates
+
+### v3.3.0 (2026-10-20) — 3-Zone Cinema Engine, Universal Studio Console & Multi-Batch Memory
+
+- 🎬 **3-Zone Cinema-Vertical Layout Engine (`CINEMATIC_3ZONE_916`)**:
+  - **Zone 1 (Top)**: High-impact dual-tone viral hook headline banner (Crisp White `#FFFFFF` + Golden Yellow `#FFDD00` or POV Red `#FF3C3C`, 5px solid black stroke outline, 4px drop shadow).
+  - **Zone 2 (Center)**: Native widescreen 16:9 / 2.39:1 / 4:3 movie scene centered with 100% canvas width and tactile hairline borders, preserving documents, courtroom papers, props, and character dialogue with zero camera jitter or awkward cropping.
+  - **Zone 3 (Bottom)**: Narrative stakes / context punchline banner (*"one bite completely blows Kathcart's mind"*) or ambient blurred reflection.
+  - **Subtitle Auto-Anchor**: Dialogue subtitles automatically placed in lower third of the widescreen footage ($Y \approx 1250\text{px}$) for natural television subtitles.
+- ⬛ **1:1 Square Reaction Mode (`SQUARE_REACTION_11`)**:
+  - Dedicated 1:1 square crop centered on character reactions and intense one-on-one dialogue.
+- 🧠 **Persistent Multi-Batch Temporal Memory (`extraction_memory.py`)**:
+  - Content-addressable hash ledger (`data/extracted_ranges.json`) tracking all cut intervals with $\pm 3.0\text{s}$ safety buffers, enabling the generation of 30–50 disjoint shorts from a single feature movie across multiple batches without scene duplication.
+- 🎨 **Tronium Optimism Console & Doppelrand (Double-Bezel) Architecture**:
+  - Agency-grade ($150k caliber) Single-Page Application with 100% self-contained embedded CSS and zero external CDN reliance.
+  - Double-Bezel nested architecture (`.card-shell` + `.card-inner`), Button-in-Button trailing icon circles with kinetic diagonal hover translation, and cubic-bezier fluid motion curves (`cubic-bezier(0.32, 0.72, 0, 1)`).
+  - Smart Content Classifier automatically profiling video media (Feature Film, Tech Screencast, Podcast Interview, Action Clip).
+  - Universal Reactive Toast Notification Dock (`#toastDock`) with auto-dismiss animations.
+  - Mission Control Telemetry Cockpit with live pulse engine controls, SVG radial gauges for daily YouTube API quota and RTX 5080 VRAM telemetry.
+  - Certified 9:16 Shorts Collections Gallery with search and folder tabs.
+- 🧪 **17 New Certified Tests (552 Total Tests)**:
+  - Added full test coverage for the 3-Zone Cinema-Vertical layout engine, 1:1 square reaction mode, viral hook typography, and persistent extraction memory with 100% pass rate.
 
 ---
 
@@ -122,9 +148,11 @@ All heavy GPU tasks run in dedicated subprocesses with isolated CUDA contexts. M
 
 | Mode | Target Content | Framing Mechanism |
 |:---:|:---|:---|
-| **Smart Portrait Pan** | Dialogue, Presenters, Solo Speakers, Podcasts | Full 9:16 vertical crop. When face scale is tight ($h \ge 0.26$), expands crop width by 25% with slim ~10% Gaussian-blurred top/bottom bands for comfortable headroom and shoulder space. |
-| **Dual-Pane Split-Screen** | Demonstrations, Interviews, Product Reviews | Stacked 50/50 split (Speaker top, Topic bottom) separated by a styled 4px `#CCFF00` neon glowing divider. Gated by strict Euclidean distance $\ge 0.28$ to prevent duplicate panes. |
-| **Full-Frame Topic Closeup** | Screencasts, Software UI, Monitors, Gameplay, B-Roll | Complete **9:16 vertical ratio full-frame crop** centered directly on active UI elements, mouse clicks, and focal objects with zero letterbox blur. |
+| **3-Zone Cinema-Vertical (`CINEMATIC_3ZONE_916`)** | Feature Films, Movies, Cinematic Widescreen, Narrative Clips | **Zone 1**: Dual-tone hook headline banner (White + Yellow/Red).<br>**Zone 2**: Native 16:9 / 2.39:1 widescreen scene centered (100% width) with dialogue subtitles in lower third.<br>**Zone 3**: Context punchline / narrative stakes banner or ambient blurred reflection. Zero cropping or camera jitter. |
+| **1:1 Square Reaction (`SQUARE_REACTION_11`)** | One-on-one Dialogue, Close-up Reactions, Monologues | Dedicated 1:1 square crop centered on character reactions and dialogue, surrounded by ambient reflection fill in 9:16 canvases. |
+| **Smart Portrait Pan (`SMART_PORTRAIT_PAN`)** | Dialogue, Presenters, Solo Speakers, Podcasts | Full 9:16 vertical crop with 2D OSQP convex camera pursuit and ±65px tripod dead-zone stabilization. |
+| **Dual-Pane Split-Screen (`DUAL_PANE_SPLIT_SCREEN`)** | Demonstrations, Interviews, Product Reviews | Stacked 50/50 split (Speaker top, Topic bottom) separated by a styled 4px `#CCFF00` neon glowing divider. Gated by strict Euclidean distance $\ge 0.28$ to prevent duplicate panes. |
+| **Full-Frame Topic Closeup (`CANVAS_GRAPHIC_FIT`)** | Screencasts, Software UI, Monitors, Gameplay, B-Roll | Complete **9:16 vertical ratio full-frame crop** centered directly on active UI elements, mouse clicks, and focal objects with zero letterbox blur. |
 
 ---
 

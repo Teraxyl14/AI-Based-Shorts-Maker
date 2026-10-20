@@ -41,6 +41,12 @@ COLOR_NORMAL = (255, 255, 255, 255)       # Crisp white fill
 COLOR_STROKE = (0, 0, 0, 255)             # Solid black outline (6px)
 COLOR_SHADOW = (0, 0, 0, 160)             # Semi-transparent black drop shadow (~63% alpha)
 
+# Viral 3-Zone Hook Banner Palette (Sample Shorts gold standard)
+COLOR_HOOK_YELLOW = (255, 221, 0, 255)   # #FFDD00 Golden Yellow (Better Call Saul / Cheese sample)
+COLOR_HOOK_RED    = (255, 60, 60, 255)    # #FF3C3C POV Viral Red (Koenigsegg sample)
+COLOR_HOOK_CYAN   = (0, 240, 255, 255)    # #00F0FF Cyber Cyan
+COLOR_HOOK_WHITE  = (255, 255, 255, 255)  # Crisp White
+
 # R3 Neon Highlight Triad Palette
 COLOR_NEON_LIME   = (204, 255, 0, 255)    # #CCFF00 Electric Lime (Primary active highlight)
 COLOR_NEON_GREEN  = (150, 255, 50, 255)   # Vivid Neon Spring Green (r+g > 350, g >= 200)
@@ -757,6 +763,214 @@ class SubtitleCompositor:
             if actual_sw > 0 and actual_sh > 0:
                 region = frame[0, y_start:y_end, x_start:x_end, :]
                 blended = text_rgb[:actual_sh, :actual_sw] + region * (1.0 - text_alpha[:actual_sh, :actual_sw])
+                blended = torch.clamp(blended, 0.0, 1.0)
+                frame[0, y_start:y_end, x_start:x_end, :] = blended
+
+        return frame
+
+    # ─── 3-Zone Cinema-Vertical Banner Compositor (Gold-Standard Viral Layout) ─
+
+    def build_top_hook_banner(self, headline: str, highlight_phrase: Optional[str] = None,
+                              target_w: int = 1080, max_h: int = 360) -> Optional[np.ndarray]:
+        """Renders high-impact dual-tone viral hook headline banner for Zone 1 (Top).
+
+        Matches the gold-standard sample shorts (Better Call Saul, Catch-22, Koenigsegg):
+        - Primary words: Crisp White (#FFFFFF)
+        - Highlight words: Golden Yellow (#FFDD00) or Electric Red (#FF3C3C)
+        - Heavy 5px solid black stroke outline + 4px drop shadow
+        - Clean multi-line centering inside the top letterbox zone
+        """
+        if not headline or not headline.strip():
+            return None
+
+        headline = headline.strip()
+        highlight_lower = (highlight_phrase or "").lower().strip()
+        is_red_highlight = bool(re.search(r"\b(pov|warning|danger|crazy|illegal|deadly)\b", headline.lower()))
+        accent_color = COLOR_HOOK_RED if is_red_highlight else COLOR_HOOK_YELLOW
+
+        font_size = 54
+        font = _resolve_font_chain(font_size)
+        words = headline.split()
+        if not words:
+            return None
+
+        # Multi-line greedy wrap (max ~24 chars or 880px per line)
+        lines = []
+        current_line = []
+        current_len = 0
+        for w in words:
+            if current_line and (current_len + len(w) + 1 > 24):
+                lines.append(current_line)
+                current_line = [w]
+                current_len = len(w)
+            else:
+                current_line.append(w)
+                current_len += len(w) + 1
+        if current_line:
+            lines.append(current_line)
+
+        # Render lines with word-level highlight
+        line_height = int(round(font_size * 1.25))
+        total_h = len(lines) * line_height + 40
+        canvas_w = target_w
+        canvas = np.zeros((min(max_h, total_h), canvas_w, 4), dtype=np.uint8)
+
+        y_cursor = 16
+        for line_words in lines:
+            rendered_words = []
+            line_w = 0
+            space_px = 12
+
+            for w in line_words:
+                clean_w = re.sub(r"[^\w]", "", w).lower()
+                is_hl = highlight_lower and (clean_w in highlight_lower or w.lower() in highlight_lower)
+                fill_col = accent_color if is_hl else COLOR_HOOK_WHITE
+
+                w_img = _render_outlined_word(
+                    w, font, fill_color=fill_col,
+                    stroke_color=(0, 0, 0, 255), stroke_width=5,
+                    shadow_color=(0, 0, 0, 180), shadow_offset=4
+                )
+                rendered_words.append(w_img)
+                line_w += w_img.shape[1] + space_px
+
+            if not rendered_words:
+                continue
+
+            line_w -= space_px
+            x_cursor = max(20, (canvas_w - line_w) // 2)
+
+            for w_img in rendered_words:
+                wh, ww = w_img.shape[:2]
+                paste_w = min(ww, canvas_w - x_cursor)
+                paste_h = min(wh, canvas.shape[0] - y_cursor)
+
+                if paste_w > 0 and paste_h > 0 and y_cursor < canvas.shape[0]:
+                    src = w_img[:paste_h, :paste_w]
+                    dst = canvas[y_cursor:y_cursor + paste_h, x_cursor:x_cursor + paste_w]
+
+                    src_a = src[:, :, 3:4].astype(np.float32) / 255.0
+                    blended_rgb = (src[:, :, :3].astype(np.float32) * src_a +
+                                   dst[:, :, :3].astype(np.float32) * (1.0 - src_a))
+                    blended_a = (src[:, :, 3:4].astype(np.float32) +
+                                 dst[:, :, 3:4].astype(np.float32) * (1.0 - src_a))
+
+                    canvas[y_cursor:y_cursor + paste_h, x_cursor:x_cursor + paste_w, :3] = blended_rgb.clip(0, 255).astype(np.uint8)
+                    canvas[y_cursor:y_cursor + paste_h, x_cursor:x_cursor + paste_w, 3:4] = blended_a.clip(0, 255).astype(np.uint8)
+
+                x_cursor += ww + space_px
+
+            y_cursor += line_height
+
+        return canvas
+
+    def build_bottom_punchline_banner(self, punchline: str,
+                                      target_w: int = 1080, max_h: int = 240) -> Optional[np.ndarray]:
+        """Renders clean context punchline / narrative stakes banner for Zone 3 (Bottom).
+
+        Matches Catch-22 ('one bite completely blows Kathcart's mind') and Better Call Saul:
+        - Clean high-contrast white sans-serif
+        - 4px solid black stroke outline + 3px drop shadow
+        - Positioned safely in bottom letterbox zone above platform UI buttons
+        """
+        if not punchline or not punchline.strip():
+            return None
+
+        punchline = punchline.strip()
+        font_size = 40
+        font = _resolve_font_chain(font_size)
+        words = punchline.split()
+        if not words:
+            return None
+
+        # Wrap text to ~30 chars per line
+        lines = []
+        current_line = []
+        current_len = 0
+        for w in words:
+            if current_line and (current_len + len(w) + 1 > 30):
+                lines.append(current_line)
+                current_line = [w]
+                current_len = len(w)
+            else:
+                current_line.append(w)
+                current_len += len(w) + 1
+        if current_line:
+            lines.append(current_line)
+
+        line_height = int(round(font_size * 1.30))
+        total_h = len(lines) * line_height + 30
+        canvas_w = target_w
+        canvas = np.zeros((min(max_h, total_h), canvas_w, 4), dtype=np.uint8)
+
+        y_cursor = 10
+        for line_words in lines:
+            line_str = " ".join(line_words)
+            line_img = _render_outlined_word(
+                line_str, font, fill_color=(255, 255, 255, 245),
+                stroke_color=(0, 0, 0, 255), stroke_width=4,
+                shadow_color=(0, 0, 0, 160), shadow_offset=3
+            )
+            wh, ww = line_img.shape[:2]
+            x_cursor = max(20, (canvas_w - ww) // 2)
+            paste_w = min(ww, canvas_w - x_cursor)
+            paste_h = min(wh, canvas.shape[0] - y_cursor)
+
+            if paste_w > 0 and paste_h > 0 and y_cursor < canvas.shape[0]:
+                src = line_img[:paste_h, :paste_w]
+                dst = canvas[y_cursor:y_cursor + paste_h, x_cursor:x_cursor + paste_w]
+                src_a = src[:, :, 3:4].astype(np.float32) / 255.0
+                blended_rgb = (src[:, :, :3].astype(np.float32) * src_a +
+                               dst[:, :, :3].astype(np.float32) * (1.0 - src_a))
+                blended_a = (src[:, :, 3:4].astype(np.float32) +
+                             dst[:, :, 3:4].astype(np.float32) * (1.0 - src_a))
+                canvas[y_cursor:y_cursor + paste_h, x_cursor:x_cursor + paste_w, :3] = blended_rgb.clip(0, 255).astype(np.uint8)
+                canvas[y_cursor:y_cursor + paste_h, x_cursor:x_cursor + paste_w, 3:4] = blended_a.clip(0, 255).astype(np.uint8)
+
+            y_cursor += line_height
+
+        return canvas
+
+    def composite_banner(self, frame: torch.Tensor, banner_rgba: np.ndarray,
+                         y_center: int, target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
+        """Composites an RGBA banner overlay onto GPU frame tensor using Porter-Duff Over."""
+        if banner_rgba is None:
+            return frame
+
+        bh, bw = banner_rgba.shape[:2]
+        y_start = max(0, min(y_center - bh // 2, target_h - bh))
+        x_start = max(0, (target_w - bw) // 2)
+
+        if self._device is None:
+            self._device = frame.device
+
+        banner_tensor = torch.from_numpy(banner_rgba.astype(np.float32) / 255.0).to(self._device)
+        banner_premul = self._premultiply_tensor(banner_tensor)
+
+        b_rgb = banner_premul[:, :, :3]
+        b_alpha = banner_premul[:, :, 3:4]
+
+        # Determine frame format [1, C, H, W] or [1, H, W, C]
+        if frame.dim() == 4 and frame.shape[1] == 3:
+            x_end = min(x_start + bw, target_w)
+            y_end = min(y_start + bh, target_h)
+            actual_w = x_end - x_start
+            actual_h = y_end - y_start
+
+            if actual_w > 0 and actual_h > 0:
+                region = frame[0, :, y_start:y_end, x_start:x_end].permute(1, 2, 0)
+                blended = b_rgb[:actual_h, :actual_w] + region * (1.0 - b_alpha[:actual_h, :actual_w])
+                blended = torch.clamp(blended, 0.0, 1.0)
+                frame[0, :, y_start:y_end, x_start:x_end] = blended.permute(2, 0, 1)
+        elif frame.dim() == 4:
+            x_end = min(x_start + bw, target_w)
+            y_end = min(y_start + bh, target_h)
+            actual_w = x_end - x_start
+            actual_h = y_end - y_start
+
+            if actual_w > 0 and actual_h > 0:
+                region = frame[0, y_start:y_end, x_start:x_end, :]
+                blended = b_rgb[:actual_h, :actual_w] + region * (1.0 - b_alpha[:actual_h, :actual_w])
                 blended = torch.clamp(blended, 0.0, 1.0)
                 frame[0, y_start:y_end, x_start:x_end, :] = blended
 

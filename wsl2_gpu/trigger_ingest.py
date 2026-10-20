@@ -18,7 +18,11 @@ import nats
 
 
 async def main():
-    if len(sys.argv) > 1:
+    target_shorts_count = int(os.getenv("AETHER_TARGET_SHORTS", 4))
+    if len(sys.argv) > 2 and sys.argv[-1].isdigit():
+        target_shorts_count = int(sys.argv[-1])
+        source_path = " ".join(sys.argv[1:-1])
+    elif len(sys.argv) > 1:
         source_path = " ".join(sys.argv[1:])
     else:
         source_path = "/data/input_videos/input.mp4"
@@ -31,6 +35,8 @@ async def main():
         "source_path": source_path,
         "file_size": 0,
         "timestamp": time.time(),
+        "target_shorts_count": target_shorts_count,
+        "framing_mode": os.getenv("AETHER_FRAMING_MODE", "CINEMATIC_3ZONE_916"),
     }
 
     await js.publish("video.ingest", json.dumps(payload).encode("utf-8"))

@@ -151,6 +151,8 @@ class CutLayoutMode(str, Enum):
     FULL_FRAME_SPEAKER_TIGHT = "FULL_FRAME_SPEAKER_TIGHT"
     FULL_FRAME_TOPIC_CLOSEUP = "FULL_FRAME_TOPIC_CLOSEUP"
     DUAL_PANE_SPLIT_SCREEN = "DUAL_PANE_SPLIT_SCREEN"
+    CINEMATIC_3ZONE_916 = "CINEMATIC_3ZONE_916"
+    SQUARE_REACTION_11 = "SQUARE_REACTION_11"
 
     # Backward compatibility aliases
     SMART_PORTRAIT_PAN = "SMART_PORTRAIT_PAN"
@@ -177,6 +179,8 @@ CutLayoutMode._CANONICAL_MAP = {
     "CANVAS_GRAPHIC_FIT": "FULL_FRAME_TOPIC_CLOSEUP",
     "TOPIC_FOCAL": "FULL_FRAME_TOPIC_CLOSEUP",
     "SPLIT_SCREEN": "DUAL_PANE_SPLIT_SCREEN",
+    "CINEMATIC_3ZONE_916": "CINEMATIC_3ZONE_916",
+    "SQUARE_REACTION_11": "SQUARE_REACTION_11",
 }
 
 
@@ -332,6 +336,9 @@ class ShortCandidate(BaseModel):
     start_time_seconds: float = Field(..., description="Start time must be >= 60s to reject intro teasers")
     duration_seconds: float = Field(..., description="Short duration must be 30-50s for single cuts, or >= 50s for multi-segment")
     title: str = Field(default="", description="Hook title for the short")
+    hook_headline: Optional[str] = Field(default=None, description="Top zone viral hook headline (max 60 chars)")
+    hook_highlight_phrase: Optional[str] = Field(default=None, description="Key phrase in hook headline to render in accent yellow/red")
+    context_punchline: Optional[str] = Field(default=None, description="Bottom zone context punchline or narrative stakes")
     reasoning: str = Field(default="", description="Narrative arc reasoning (Hook → Escalation → Payoff)")
     framing_mode: CutLayoutMode = Field(
         default=CutLayoutMode.FULL_FRAME_SPEAKER_TIGHT,
@@ -384,6 +391,10 @@ class RenderJob(BaseModel):
     crop_path_data: List[List[float]] = Field(default_factory=list, description="Pre-computed [N, 2] crop center path (normalized cx, cy per frame)")
     scene_cut_frames: List[int] = Field(default_factory=list, description="Frame indices of detected scene cuts for trajectory teleports")
     bgm_path: Optional[str] = Field(default=None, description="Optional path to background music track for auto-ducked mixing")
+    hook_headline: Optional[str] = Field(default=None, description="Top zone viral hook headline")
+    hook_highlight_phrase: Optional[str] = Field(default=None, description="Highlighted phrase in top hook")
+    context_punchline: Optional[str] = Field(default=None, description="Bottom zone context punchline")
+    framing_mode: Optional[str] = Field(default="CINEMATIC_3ZONE_916", description="Framing layout mode")
 
 
 # ─── Pipeline State (LangGraph root schema) ──────────────────────────────────

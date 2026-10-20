@@ -6,9 +6,7 @@ Enforces strict sensitivity and safety filtering.
 """
 
 import os
-import sys
 import re
-import json
 import time
 import logging
 import urllib.request
@@ -200,6 +198,31 @@ def search_candidate_videos_for_topic(topic: str, max_results: int = 3) -> List[
         logger.warning(f"Error searching candidate videos for '{topic}': {e}")
 
     return candidates
+
+
+def download_candidate_video(video_url: str, output_dir: str = "data/input_videos", max_height: int = 1080) -> Optional[str]:
+    """
+    Downloads candidate long-form video in highest available quality (up to max_height, min 1080p if available)
+    into the designated input_videos directory. Returns local file path on success.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    try:
+        import yt_dlp
+        ydl_opts = {
+            "format": f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={max_height}][ext=mp4]/best",
+            "outtmpl": os.path.join(output_dir, "%(title).60s [%(id)s].%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            filename = ydl.prepare_filename(info)
+            if os.path.exists(filename):
+                logger.info(f"Successfully downloaded candidate video to: {filename}")
+                return filename
+    except Exception as e:
+        logger.error(f"Failed to download {video_url}: {e}")
+    return None
 
 
 def main():

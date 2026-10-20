@@ -198,6 +198,109 @@ def render_canvas_uncertainty_fit(frame: torch.Tensor,
     return processed
 
 
+def render_cinematic_3zone_916(frame: torch.Tensor,
+                               target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
+    """MODE: CINEMATIC_3ZONE_916 (3-Zone Cinema-Vertical Layout Engine):
+    Matches the gold-standard sample shorts (Catch-22, Better Call Saul, Koenigsegg):
+    - Zone 1 (Top): Ambient blurred background fill ready for Top Hook banner overlay.
+    - Zone 2 (Center): Native widescreen 16:9 / 2.39:1 scene centered with 100% width,
+      preserving props, documents, and character framing with ZERO camera jitter or cropping.
+    - Zone 3 (Bottom): Ambient blurred background fill ready for Bottom Punchline overlay.
+    - Background: Cover scale, Gaussian blurred (sigma=18.0, k=31), dimmed to 40% (bg * 0.40).
+    - Hairline subtle boundary borders at scene edges for tactile contrast.
+    """
+    B, C, src_h, src_w = frame.shape
+
+    # Layer 1: Blurred, darkened cover background
+    scale_cover = max(float(target_w) / float(src_w), float(target_h) / float(src_h))
+    bg_w = int(round(src_w * scale_cover))
+    bg_h = int(round(src_h * scale_cover))
+    bg_scaled = torch.nn.functional.interpolate(frame, size=(bg_h, bg_w), mode='bilinear', align_corners=False)
+
+    start_x_bg = (bg_w - target_w) // 2
+    start_y_bg = (bg_h - target_h) // 2
+    bg_cropped = bg_scaled[:, :, start_y_bg:start_y_bg + target_h, start_x_bg:start_x_bg + target_w]
+
+    bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
+    if kornia is not None:
+        bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(18.0, 18.0), border_type='replicate')
+    else:
+        bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=9, stride=1, padding=4, count_include_pad=False)
+    bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    layer1 = bg_blurred * 0.40
+
+    # Layer 2: 100% width uncropped widescreen scene
+    fg_w = target_w
+    fg_h = int(round(float(src_h) * (float(fg_w) / float(src_w))))
+    layer2 = torch.nn.functional.interpolate(frame, size=(fg_h, fg_w), mode='bilinear', align_corners=False)
+
+    start_y_fg = (target_h - fg_h) // 2
+    end_y_fg = start_y_fg + fg_h
+
+    processed = layer1.clone()
+    processed[:, :, start_y_fg:end_y_fg, :] = layer2
+
+    # Hairline tactile boundary shadows at the widescreen border
+    if start_y_fg >= 2:
+        processed[:, :, start_y_fg-2:start_y_fg, :] = processed[:, :, start_y_fg-2:start_y_fg, :] * 0.25
+    if end_y_fg + 2 <= target_h:
+        processed[:, :, end_y_fg:end_y_fg+2, :] = processed[:, :, end_y_fg:end_y_fg+2, :] * 0.25
+
+    return processed
+
+
+def render_square_reaction_11(frame: torch.Tensor, cx_norm: float = 0.5, cy_norm: float = 0.5,
+                              target_w: int = 1080, target_h: int = 1920) -> torch.Tensor:
+    """MODE: SQUARE_REACTION_11 (1:1 Square Reaction Mode):
+    Matches the Transformers & Sniper reference shorts:
+    - Focuses on 1:1 square crop centered on character reaction / dialogue.
+    - If target canvas is 9:16 (1080x1920): Centers 1080x1080 square in the middle third
+      with blurred cover background on top and bottom.
+    - If target canvas is 1:1 (e.g. 1080x1080): Full square fill.
+    """
+    B, C, src_h, src_w = frame.shape
+    sq_size = min(src_h, src_w)
+
+    x_center = cx_norm * float(src_w)
+    x0 = max(0, min(src_w - sq_size, int(round(x_center - sq_size / 2.0))))
+    x1 = x0 + sq_size
+
+    y_center = cy_norm * float(src_h)
+    y0 = max(0, min(src_h - sq_size, int(round(y_center - sq_size / 2.0))))
+    y1 = y0 + sq_size
+
+    cropped_sq = frame[:, :, y0:y1, x0:x1]
+
+    if target_w == target_h:
+        return torch.nn.functional.interpolate(cropped_sq, size=(target_h, target_w), mode='bilinear', align_corners=False)
+
+    # If canvas is vertical (e.g. 1080x1920), center 1080x1080 square
+    scale_cover = max(float(target_w) / float(src_w), float(target_h) / float(src_h))
+    bg_w = int(round(src_w * scale_cover))
+    bg_h = int(round(src_h * scale_cover))
+    bg_scaled = torch.nn.functional.interpolate(frame, size=(bg_h, bg_w), mode='bilinear', align_corners=False)
+
+    start_x_bg = (bg_w - target_w) // 2
+    start_y_bg = (bg_h - target_h) // 2
+    bg_cropped = bg_scaled[:, :, start_y_bg:start_y_bg + target_h, start_x_bg:start_x_bg + target_w]
+
+    bg_down = torch.nn.functional.interpolate(bg_cropped, size=(target_h // 4, target_w // 4), mode='bilinear', align_corners=False)
+    if kornia is not None:
+        bg_blurred_down = kornia.filters.gaussian_blur2d(bg_down, kernel_size=(31, 31), sigma=(15.0, 15.0), border_type='replicate')
+    else:
+        bg_blurred_down = torch.nn.functional.avg_pool2d(bg_down, kernel_size=9, stride=1, padding=4, count_include_pad=False)
+    bg_blurred = torch.nn.functional.interpolate(bg_blurred_down, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    layer1 = bg_blurred * 0.45
+
+    sq_target = min(target_w, target_h)  # 1080
+    fg_sq = torch.nn.functional.interpolate(cropped_sq, size=(sq_target, sq_target), mode='bilinear', align_corners=False)
+
+    start_y = (target_h - sq_target) // 2  # (1920 - 1080) // 2 = 420px
+    processed = layer1.clone()
+    processed[:, :, start_y:start_y + sq_target, :] = fg_sq
+    return processed
+
+
 def render_broll_pillarbox(source_tensor: torch.Tensor, target_canvas_shape: tuple) -> torch.Tensor:
     """Backward-compatible wrapper for CANVAS_GRAPHIC_FIT layout helper."""
     tgt_h, tgt_w = target_canvas_shape
@@ -968,6 +1071,22 @@ class ThreeThreadRenderPipeline:
                 for s in self.clip.segments
             ])
 
+            # Pre-render 3-Zone viral banners if specified on RenderJob (gold standard viral shorts)
+            top_banner_rgba = None
+            bottom_banner_rgba = None
+            if self.subtitle_compositor:
+                hook_text = getattr(self.job, "hook_headline", None)
+                hook_hl = getattr(self.job, "hook_highlight_phrase", None)
+                punchline_text = getattr(self.job, "context_punchline", None)
+                if hook_text:
+                    top_banner_rgba = self.subtitle_compositor.build_top_hook_banner(
+                        headline=hook_text, highlight_phrase=hook_hl, target_w=target_w
+                    )
+                if punchline_text:
+                    bottom_banner_rgba = self.subtitle_compositor.build_bottom_punchline_banner(
+                        punchline=punchline_text, target_w=target_w
+                    )
+
             while not self.stop_event.is_set():
                 try:
                     slot = self.decode_to_inference.get(timeout=0.2)
@@ -1068,8 +1187,35 @@ class ThreeThreadRenderPipeline:
                     current_target_bbox = p_bbox
 
                 # Self-Aware Universal Framing Hierarchy:
+                job_framing = getattr(self.job, "framing_mode", None)
+                is_3zone = (
+                    (norm_layout and ("3ZONE" in norm_layout or "CINEMATIC" in norm_layout or "CINEMATIC_3ZONE_916" in norm_layout)) or
+                    (job_framing and ("3ZONE" in str(job_framing).upper() or "CINEMATIC" in str(job_framing).upper() or "CINEMATIC_3ZONE_916" in str(job_framing).upper()))
+                )
+                is_square = (
+                    (norm_layout and ("SQUARE" in norm_layout or "SQUARE_REACTION_11" in norm_layout or "REACTION_11" in norm_layout)) or
+                    (job_framing and ("SQUARE" in str(job_framing).upper() or "SQUARE_REACTION_11" in str(job_framing).upper() or "REACTION_11" in str(job_framing).upper())) or
+                    (target_w == target_h)
+                )
+
+                # 0a. 3-Zone Cinema-Vertical Layout (Gold-Standard Viral Movie Mode)
+                if is_3zone:
+                    rendered_tensor = render_cinematic_3zone_916(
+                        frame=frame,
+                        target_w=target_w,
+                        target_h=target_h
+                    )
+                # 0b. 1:1 Square Reaction Mode (Close-up Dialogue / Reaction)
+                elif is_square:
+                    rendered_tensor = render_square_reaction_11(
+                        frame=frame,
+                        cx_norm=target_cx if target_cx is not None else 0.5,
+                        cy_norm=target_cy if target_cy is not None else 0.5,
+                        target_w=target_w,
+                        target_h=target_h
+                    )
                 # 1. Uncertainty Fallback: Emergency fallback strictly when explicitly specified by layout
-                if norm_layout and ("UNCERTAINTY" in norm_layout or "CANVAS_UNCERTAINTY_FIT" in norm_layout) and "PORTRAIT" not in norm_layout:
+                elif norm_layout and ("UNCERTAINTY" in norm_layout or "CANVAS_UNCERTAINTY_FIT" in norm_layout) and "PORTRAIT" not in norm_layout:
                     rendered_tensor = render_canvas_uncertainty_fit(
                         frame=frame,
                         target_w=target_w,
@@ -1150,8 +1296,13 @@ class ThreeThreadRenderPipeline:
                         face_bbox=current_face_bbox,
                         target_bbox=current_target_bbox
                     )
-                # Uniform Subtitle Anchor: Y = 65% (Y ≈ 1248px)
-                sub_baseline_y = float(target_h) * 0.65
+                # Subtitle Anchor: In 3-Zone mode, anchor subtitles in lower third of widescreen scene
+                if is_3zone:
+                    fg_h_calc = int(round(float(src_h) * (float(target_w) / float(src_w))))
+                    start_y_fg = (target_h - fg_h_calc) // 2
+                    sub_baseline_y = float(start_y_fg + int(fg_h_calc * 0.84))
+                else:
+                    sub_baseline_y = float(target_h) * 0.65
 
                 processed = (rendered_tensor.squeeze(0).permute(1, 2, 0) * 255.0).byte()
 
@@ -1180,6 +1331,35 @@ class ThreeThreadRenderPipeline:
                     processed_final = (processed_with_subs.squeeze(0) * 255.0).byte().clone()
                 else:
                     processed_final = processed
+
+                # 3-Zone Top Hook Banner & Bottom Context Punchline Compositing
+                if self.subtitle_compositor and (top_banner_rgba is not None or bottom_banner_rgba is not None):
+                    frame_float_banner = processed_final.unsqueeze(0).float() / 255.0
+                    fg_h_calc = int(round(float(src_h) * (float(target_w) / float(src_w))))
+                    start_y_fg = (target_h - fg_h_calc) // 2
+                    end_y_fg = start_y_fg + fg_h_calc
+
+                    if top_banner_rgba is not None:
+                        # Zone 1 (Top): Center vertically within the top letterbox space [0, start_y_fg]
+                        y_top_center = max(110, start_y_fg // 2)
+                        frame_float_banner = self.subtitle_compositor.composite_banner(
+                            frame=frame_float_banner,
+                            banner_rgba=top_banner_rgba,
+                            y_center=y_top_center,
+                            target_w=target_w,
+                            target_h=target_h
+                        )
+                    if bottom_banner_rgba is not None:
+                        # Zone 3 (Bottom): Center vertically within the bottom letterbox space [end_y_fg, target_h]
+                        y_bottom_center = min(target_h - 100, end_y_fg + (target_h - end_y_fg) // 2 - 10)
+                        frame_float_banner = self.subtitle_compositor.composite_banner(
+                            frame=frame_float_banner,
+                            banner_rgba=bottom_banner_rgba,
+                            y_center=y_bottom_center,
+                            target_w=target_w,
+                            target_h=target_h
+                        )
+                    processed_final = (frame_float_banner.squeeze(0) * 255.0).byte().clone()
 
                 # Bottom Neon Gradient Retention Scrubber (#38BDF8 cyan -> #CCFF00 electric lime)
                 if clip_total_duration > 0.0:

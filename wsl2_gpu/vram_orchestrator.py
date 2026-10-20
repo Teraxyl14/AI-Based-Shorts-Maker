@@ -547,12 +547,14 @@ def run_phase2_vlm_editorial_worker(video_path: str, words_data: list,
         max_dur = float(os.getenv("AETHER_MAX_SHORT_DURATION", "60.0"))
         target_dur = float(os.getenv("AETHER_TARGET_SHORT_DURATION", "55.0"))
         min_start = float(os.getenv("AETHER_MIN_START_TIME", "60.0"))
+        target_shorts = int(os.getenv("AETHER_TARGET_SHORTS", "4"))
 
         editorial = EditorialEngine(
             min_duration=min_dur,
             max_duration=max_dur,
             target_duration=target_dur,
-            min_start_time=min_start
+            min_start_time=min_start,
+            target_shorts=target_shorts
         )
         shorts = asyncio.run(editorial.select_shorts(
             video_path=video_path,
@@ -762,7 +764,7 @@ def run_phase3_render_worker(video_path: str, render_manifest: dict,
             editorial_cut_frames = [int(round(c * fps)) for c in editorial_cuts]
             all_cut_frames = sorted(set(norm_scene_cut_frames + editorial_cut_frames))
 
-            # Build render job
+            # Build render job with 3-Zone viral hook & punchline attributes
             render_job = RenderJob(
                 source_path=video_path,
                 output_dir=output_dir,
@@ -775,6 +777,10 @@ def run_phase3_render_worker(video_path: str, render_manifest: dict,
                 spatial_events=norm_spatial_data,
                 crop_path_data=crop_path.tolist(),
                 scene_cut_frames=all_cut_frames,
+                hook_headline=short.get("hook_headline") if isinstance(short, dict) else getattr(short, "hook_headline", None),
+                hook_highlight_phrase=short.get("hook_highlight_phrase") if isinstance(short, dict) else getattr(short, "hook_highlight_phrase", None),
+                context_punchline=short.get("context_punchline") if isinstance(short, dict) else getattr(short, "context_punchline", None),
+                framing_mode=str(short.get("framing_mode", "CINEMATIC_3ZONE_916") if isinstance(short, dict) else getattr(short, "framing_mode", "CINEMATIC_3ZONE_916")),
             )
 
             # Execute render pipeline

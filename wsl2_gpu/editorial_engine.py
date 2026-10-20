@@ -22,6 +22,11 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from shared.schemas import WordTimestamp, UniversalContentProfile
+from wsl2_gpu.extraction_memory import (
+    get_excluded_intervals,
+    is_interval_excluded,
+    record_extracted_batch,
+)
 
 logger = logging.getLogger("AetherEditorialEngine")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -403,12 +408,14 @@ class EditorialEngine:
                  min_duration: Optional[float] = None,
                  max_duration: Optional[float] = None,
                  target_duration: Optional[float] = None,
-                 min_start_time: Optional[float] = None):
+                 min_start_time: Optional[float] = None,
+                 target_shorts: Optional[int] = None):
         self.vllm_url = vllm_url or VLLM_BRAIN_URL
         self.min_duration = min_duration if min_duration is not None else float(os.getenv("AETHER_MIN_SHORT_DURATION", str(MIN_DURATION)))
         self.max_duration = max_duration if max_duration is not None else float(os.getenv("AETHER_MAX_SHORT_DURATION", str(MAX_DURATION)))
         self.target_duration = target_duration if target_duration is not None else float(os.getenv("AETHER_TARGET_SHORT_DURATION", "60.0"))
         self.min_start_time = min_start_time if min_start_time is not None else float(os.getenv("AETHER_MIN_START_TIME", str(MIN_START_TIME)))
+        self.target_shorts = target_shorts if target_shorts is not None else int(os.getenv("AETHER_TARGET_SHORTS", str(TARGET_SHORTS)))
 
     # ─── Shot Boundary Construction ──────────────────────────────────────
 
@@ -625,7 +632,7 @@ class EditorialEngine:
                 f"You are an expert short-form video editor. Analyze this {video_duration:.0f}s video "
                 f"using the keyframe images and transcript below.\n\n"
                 f"{profile_directive}"
-                f"SELECT exactly {TARGET_SHORTS} non-overlapping narrative arcs for YouTube Shorts. "
+                f"SELECT exactly {self.target_shorts} non-overlapping narrative arcs for YouTube Shorts. "
                 f"Each short MUST:\n"
                 f"- Start at {MIN_START_TIME:.1f}s or later (strictly t >= 60.0s, NO intro teasers/montages)\n"
                 f"- Be {self.min_duration:.0f}-{self.max_duration:.0f} seconds long (strictly {self.min_duration:.1f}s to {self.max_duration:.1f}s, max 1 minute)\n"
@@ -666,19 +673,27 @@ class EditorialEngine:
         content_blocks.append({
             "type": "text",
             "text": (
-                f"\n\nRespond with EXACTLY {TARGET_SHORTS} shorts in this JSON format:\n"
+                f"\n\nRespond with EXACTLY {self.target_shorts} shorts in this JSON format:\n"
                 '{\n'
                 '  "selected_shorts": [\n'
                 '    {\n'
                 f'      "start_time_seconds": <float, must be >= {self.min_start_time:.1f}>,\n'
                 f'      "duration_seconds": <float, must be {self.min_duration:.1f}-{self.max_duration:.1f}>,\n'
-                '      "segments": [[<float start1>, <float end1>], [<float start2>, <float end2>]],  // optional non-linear clips summing to >= 50.0s\n'
-                '      "title": "<hook title for this short>",\n'
-                '      "reasoning": "<why this forms a cohesive 3-act narrative arc (Hook -> Escalation -> Payoff)>",\n'
-                '      "framing_mode": "<SMART_PORTRAIT_PAN, CANVAS_GRAPHIC_FIT, or CANVAS_UNCERTAINTY_FIT>"\n'
+                '      "segments": [[<float start1>, <float end1>], [<float start2>, <float end2>]],\n'
+                '      "title": "<short title>",\n'
+                '      "hook_headline": "<top zone viral hook banner, max 60 chars, e.g. He changed one number and left with no evidence>",\n'
+                '      "hook_highlight_phrase": "<key phrase in hook headline to highlight in accent yellow/red, e.g. and left with no evidence>",\n'
+                '      "context_punchline": "<bottom zone punchline or stakes, e.g. one bite completely blows Kathcart\'s mind>",\n'
+                '      "framing_mode": "<CINEMATIC_3ZONE_916, SQUARE_REACTION_11, or SMART_PORTRAIT_PAN>",\n'
+                '      "reasoning": "<why this forms a cohesive 3-act narrative arc (Hook -> Escalation -> Payoff)>"\n'
                 '    }\n'
                 '  ]\n'
-                '}'
+                '}\n\n'
+                'FEW-SHOT VIRAL EXEMPLARS (anchored from gold-standard viral clips):\n'
+                '- Pattern 1 (Curiosity Gap Widescreen Movie): hook_headline="He changed one number and left with no evidence", hook_highlight_phrase="and left with no evidence", framing_mode="CINEMATIC_3ZONE_916"\n'
+                '- Pattern 2 (Action / POV Hook): hook_headline="POV: Koenigsegg invented the legal money shift 💀", hook_highlight_phrase="the legal money shift 💀", framing_mode="CINEMATIC_3ZONE_916"\n'
+                '- Pattern 3 (Series / Comedy Climax): hook_headline="Catch-22: Milo\'s Olive Oil Scheme", context_punchline="one bite completely blows Kathcart\'s mind", framing_mode="CINEMATIC_3ZONE_916"\n'
+                '- Pattern 4 (Character Reaction Close-up): hook_headline="*SURPRISED HOW HE GOT HERE*", framing_mode="SQUARE_REACTION_11"\n'
             )
         })
 
@@ -736,14 +751,17 @@ class EditorialEngine:
 
             candidates = []
             for item in data.get("selected_shorts", []):
-                mode = item.get("framing_mode", "SMART_PORTRAIT_PAN")
-                if mode not in ("SMART_PORTRAIT_PAN", "CANVAS_GRAPHIC_FIT"):
-                    mode = "SMART_PORTRAIT_PAN"
+                mode = item.get("framing_mode", "CINEMATIC_3ZONE_916")
+                if mode not in ("CINEMATIC_3ZONE_916", "SQUARE_REACTION_11", "SMART_PORTRAIT_PAN", "CANVAS_GRAPHIC_FIT"):
+                    mode = "CINEMATIC_3ZONE_916"
 
                 candidates.append(ShortCandidate(
                     start_time_seconds=float(item["start_time_seconds"]),
                     duration_seconds=float(item["duration_seconds"]),
                     title=str(item.get("title", "")),
+                    hook_headline=str(item.get("hook_headline", item.get("title", ""))),
+                    hook_highlight_phrase=str(item.get("hook_highlight_phrase", "")),
+                    context_punchline=str(item.get("context_punchline", "")),
                     reasoning=str(item.get("reasoning", "")),
                     framing_mode=mode,
                 ))
@@ -757,10 +775,12 @@ class EditorialEngine:
 
     def _validate_and_filter(self, candidates: List[ShortCandidate],
                              video_duration: float,
-                             transcript_words: Optional[List[Any]] = None) -> List[ShortCandidate]:
+                             transcript_words: Optional[List[Any]] = None,
+                             excluded_intervals: Optional[List[Tuple[float, float]]] = None) -> List[ShortCandidate]:
         """Applies hard programmatic constraints to selected shorts.
 
         Enforces:
+            - Rejection of previously extracted intervals (Multi-Batch Extraction Memory)
             - Hard rejection of intro teasers: start_time strictly >= 60.0s (MIN_START_TIME)
             - Duration bounds: strictly [50.0, 60.0] seconds (max 1 minute)
             - Narrative arc Hook: first spoken word must occur <= 1.5s into the clip (0-5s window)
@@ -899,7 +919,7 @@ class EditorialEngine:
                 )
                 continue
 
-            # Overlap check
+            # Overlap check with current batch
             overlap = False
             for v in valid:
                 if (c.start_time_seconds < v.end_time_seconds and
@@ -911,11 +931,20 @@ class EditorialEngine:
                     )
                     break
 
+            # Multi-Batch Exclusion check: Skip candidate if it overlaps with past batches
+            if not overlap and excluded_intervals and is_interval_excluded(c.start_time_seconds, c.end_time_seconds, excluded_intervals):
+                logger.warning(
+                    f"REJECTED previously extracted short [{c.start_time_seconds:.1f}s-{c.end_time_seconds:.1f}s]: '{c.title}' "
+                    f"(matches historical extraction memory)"
+                )
+                overlap = True
+
             if not overlap:
                 valid.append(c)
 
+        target_quota = getattr(self, "target_shorts", TARGET_SHORTS)
         logger.info(f"Validated {len(valid)}/{len(candidates)} shorts (rejected {len(candidates) - len(valid)})")
-        return valid[:TARGET_SHORTS]
+        return valid[:target_quota]
 
     # ─── Top-Level API ───────────────────────────────────────────────────
 
@@ -923,13 +952,14 @@ class EditorialEngine:
                                shots: Optional[List[ShotBoundary]],
                                video_duration: float,
                                existing: Optional[List[ShortCandidate]] = None,
-                               needed: int = 4) -> List[ShortCandidate]:
+                               needed: int = 4,
+                               excluded_intervals: Optional[List[Tuple[float, float]]] = None) -> List[ShortCandidate]:
         """Generates high-retention fallback shorts using audio transcription and shot midpoints.
 
         Guarantees:
             - start >= min_start_time (strictly rejecting intro teasers)
             - duration in [min_duration, max_duration]
-            - non-overlapping with existing shorts and each other
+            - non-overlapping with existing shorts, past extracted batches, and each other
             - multi-modal alignment: speech pauses, sentence ends, and shot midpoints
             - 3-act narrative structure: Hook (0-5s, first word <= 1.5s), Escalation, Payoff
             - supports non-linear multi-segment stitching when single spans are insufficient
@@ -960,6 +990,10 @@ class EditorialEngine:
             for sp_s, sp_e, _ in sponsor_intervals:
                 if start_s < sp_e and end_s > sp_s:
                     return True
+            if excluded_intervals:
+                for ex_s, ex_e in excluded_intervals:
+                    if start_s < ex_e and end_s > ex_s:
+                        return True
             return False
 
         def get_free_gaps(candidate_list: List[Any]) -> List[Tuple[float, float]]:
@@ -970,6 +1004,9 @@ class EditorialEngine:
                 all_occ.append((max(min_start, s_start), min(video_duration, s_end)))
             for sp_s, sp_e, _ in sponsor_intervals:
                 all_occ.append((max(min_start, sp_s), min(video_duration, sp_e)))
+            if excluded_intervals:
+                for ex_s, ex_e in excluded_intervals:
+                    all_occ.append((max(min_start, ex_s), min(video_duration, ex_e)))
             all_occ.sort(key=lambda x: x[0])
             gaps = []
             curr_t = min_start
@@ -1320,7 +1357,15 @@ class EditorialEngine:
         """
         logger.info(f"Starting editorial engine for {video_path} ({video_duration:.1f}s)")
 
-        # Step 0: Universal Video Content Profiling
+        # Step 0: Multi-Batch Extraction Memory
+        excluded_intervals = get_excluded_intervals(video_path)
+        if excluded_intervals:
+            logger.info(
+                f"Multi-Batch Memory: Loaded {len(excluded_intervals)} previously extracted "
+                f"intervals to exclude for '{os.path.basename(video_path)}'"
+            )
+
+        # Universal Video Content Profiling
         content_profile = classify_video_profile(
             transcript_words=transcript_words,
             spatial_events=spatial_events,
@@ -1343,6 +1388,7 @@ class EditorialEngine:
         # Step 2: Extract midpoint keyframes
         keyframes = self.extract_midpoint_keyframes(video_path, candidate_shots)
 
+        target_quota = getattr(self, "target_shorts", TARGET_SHORTS)
         valid_shorts: List[ShortCandidate] = []
 
         if not keyframes:
@@ -1352,11 +1398,26 @@ class EditorialEngine:
                 shots=shots,
                 video_duration=video_duration,
                 existing=[],
-                needed=TARGET_SHORTS
+                needed=target_quota,
+                excluded_intervals=excluded_intervals
             )
             for s in raw_fallbacks:
                 s.content_profile = content_profile
                 extract_beats_for_candidate(s, transcript_words, spatial_events or [])
+            if raw_fallbacks:
+                record_extracted_batch(
+                    video_path=video_path,
+                    video_duration_seconds=video_duration,
+                    shorts=[
+                        {
+                            "start_time_seconds": s.start_time_seconds,
+                            "duration_seconds": s.duration_seconds,
+                            "end_time_seconds": s.end_time_seconds,
+                            "title": s.title
+                        }
+                        for s in raw_fallbacks
+                    ]
+                )
             return raw_fallbacks
 
         # Limit keyframes so transcript keeps most of the 3k-token budget
@@ -1382,21 +1443,25 @@ class EditorialEngine:
         try:
             response = await self._call_vllm(messages)
             candidates = self._parse_response(response)
-            valid_shorts = self._validate_and_filter(candidates, video_duration, transcript_words=transcript_words)
+            valid_shorts = self._validate_and_filter(
+                candidates, video_duration, transcript_words=transcript_words,
+                excluded_intervals=excluded_intervals
+            )
         except Exception as e:
             logger.warning(f"VLM inference unavailable/failed ({e}). Falling back to heuristic selection.")
             valid_shorts = []
 
-        # Step 5: Top up with fallback shorts if vLLM produced fewer than TARGET_SHORTS
-        if len(valid_shorts) < TARGET_SHORTS:
-            needed = TARGET_SHORTS - len(valid_shorts)
-            logger.info(f"Topping up {needed} shorts to satisfy {TARGET_SHORTS} quota...")
+        # Step 5: Top up with fallback shorts if vLLM produced fewer than target quota
+        if len(valid_shorts) < target_quota:
+            needed = target_quota - len(valid_shorts)
+            logger.info(f"Topping up {needed} shorts to satisfy {target_quota} quota...")
             fallbacks = self.select_fallback_shorts(
                 transcript_words=transcript_words,
                 shots=shots,
                 video_duration=video_duration,
                 existing=valid_shorts,
-                needed=needed
+                needed=needed,
+                excluded_intervals=excluded_intervals
             )
             valid_shorts.extend(fallbacks)
 
@@ -1407,6 +1472,22 @@ class EditorialEngine:
             logger.info(
                 f"  Short {i}: [{s.start_time_seconds:.1f}s → {s.end_time_seconds:.1f}s] "
                 f"({s.duration_seconds:.1f}s) mode={s.framing_mode} beats={len(beats)} — '{s.title}'"
+            )
+
+        # Step 7: Record newly extracted batch into persistent extraction memory ledger
+        if valid_shorts:
+            record_extracted_batch(
+                video_path=video_path,
+                video_duration_seconds=video_duration,
+                shorts=[
+                    {
+                        "start_time_seconds": s.start_time_seconds,
+                        "duration_seconds": s.duration_seconds,
+                        "end_time_seconds": s.end_time_seconds,
+                        "title": s.title
+                    }
+                    for s in valid_shorts
+                ]
             )
 
         return valid_shorts

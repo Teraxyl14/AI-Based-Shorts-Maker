@@ -1,902 +1,1656 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Project Aether — Autonomous AI Shorts Studio</title>
-  <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@latest" crossorigin="anonymous"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Outfit', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-          colors: {
-            brand: {
-              50: '#eff6ff',
-              500: '#3b82f6',
-              600: '#2563eb',
-              700: '#1d4ed8',
-              neon: '#38bdf8',
-              emerald: '#10b981',
-              amber: '#f59e0b',
-            }
-          }
-        }
-      }
-    }
-  </script>
+  <title>Project Aether — Tronium Autonomous Studio</title>
   <style>
+    :root, [data-theme="dark"] {
+      --bg: #070a10;
+      --card-outer: #0a0f1a;
+      --card-inner: #0f172a;
+      --panel: #131b2e;
+      --panel-elevated: #1a243d;
+      --border: rgba(56, 189, 248, 0.18);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --text: #f8fafc;
+      --text-muted: #cbd5e1;
+      --accent: #00f0ff;
+      --accent-cyan: #38bdf8;
+      --accent-lime: #ccff00;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.3);
+      --shadow-inset: inset 0 1px 1px rgba(255, 255, 255, 0.08), inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+      --focus-ring: 0 0 0 2px rgba(0, 240, 255, 0.4);
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --card-outer: #f1f5f9;
+      --card-inner: #ffffff;
+      --panel: #f8fafc;
+      --panel-elevated: #e2e8f0;
+      --border: rgba(2, 132, 199, 0.22);
+      --border-subtle: rgba(0, 0, 0, 0.08);
+      --text: #0f172a;
+      --text-muted: #334155;
+      --accent: #0369a1;
+      --accent-cyan: #0284c7;
+      --accent-lime: #047857;
+      --accent-green: #059669;
+      --accent-amber: #d97706;
+      --accent-red: #dc2626;
+      --shadow: 0 10px 25px rgba(0, 0, 0, 0.06);
+      --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.04);
+      --shadow-inset: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+      --focus-ring: 0 0 0 2px rgba(2, 132, 199, 0.35);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background-color: #0b0f17;
-      color: #f1f5f9;
-      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
       font-size: 14px;
       line-height: 1.5;
+      padding-bottom: 80px;
+      transition: background 0.25s cubic-bezier(0.32, 0.72, 0, 1), color 0.25s cubic-bezier(0.32, 0.72, 0, 1);
     }
-    h1 {
-      font-size: 36px !important;
-      line-height: 1.2 !important;
-      font-weight: 800 !important;
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+    /* Double-Bezel (Doppelrand) Architecture */
+    .card-shell {
+      background: var(--card-outer);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 4px;
+      box-shadow: var(--shadow);
+      transition: all 0.26s cubic-bezier(0.32, 0.72, 0, 1);
     }
-    h2 {
-      font-size: 24px !important;
-      line-height: 1.3 !important;
-      font-weight: 700 !important;
+    .card-inner {
+      background: var(--card-inner);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: var(--shadow-inset);
+      transition: all 0.26s cubic-bezier(0.32, 0.72, 0, 1);
     }
-    h3 {
-      font-size: 18px !important;
-      line-height: 1.4 !important;
-      font-weight: 600 !important;
+    .card-shell:hover {
+      border-color: var(--accent);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), var(--shadow);
+      transform: translateY(-2px);
     }
-    h4 {
-      font-size: 14px !important;
-      line-height: 1.4 !important;
-      font-weight: 600 !important;
+
+    /* Universal Toast Notification Dock */
+    .toast-dock {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+      max-width: 380px;
     }
-    .glass-card {
-      background: rgba(17, 24, 39, 0.75);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 1.5rem;
-      border-radius: 1rem;
+    .toast-item {
+      pointer-events: auto;
+      background: var(--card-inner);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 18px;
+      font-weight: 600;
+      font-size: 13px;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: toastIn 0.32s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+      transition: opacity 0.24s ease, transform 0.24s ease;
     }
-    .glass-card-active {
-      background: rgba(17, 24, 39, 0.85);
-      backdrop-filter: blur(16px);
-      border: 1px solid rgba(56, 189, 248, 0.35);
-      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
-      padding: 1.5rem;
-      border-radius: 1rem;
+    .toast-item.toast-success { border-color: var(--accent-lime); }
+    .toast-item.toast-success .toast-icon { color: var(--accent-lime); }
+    .toast-item.toast-error { border-color: var(--accent-red); }
+    .toast-item.toast-error .toast-icon { color: var(--accent-red); }
+    .toast-item.toast-info { border-color: var(--accent); }
+    .toast-item.toast-info .toast-icon { color: var(--accent); }
+    @keyframes toastIn {
+      from { transform: translateX(40px) scale(0.95); opacity: 0; }
+      to { transform: translateX(0) scale(1); opacity: 1; }
     }
-    .custom-scrollbar::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
     }
-    .custom-scrollbar::-webkit-scrollbar-track {
-      background: #0f172a;
+    .header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      height: 68px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      box-shadow: var(--shadow);
     }
-    .custom-scrollbar::-webkit-scrollbar-thumb {
-      background: #334155;
-      border-radius: 3px;
+    .header-content {
+      max-width: 1320px;
+      margin: 0 auto;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
-    .pulse-glow {
-      animation: pulseGlow 2s infinite ease-in-out;
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      font-size: 19px;
+      letter-spacing: -0.02em;
     }
-    @keyframes pulseGlow {
-      0%, 100% { opacity: 0.6; transform: scale(1); }
-      50% { opacity: 1; transform: scale(1.05); }
+    .brand-badge {
+      background: #0369a1;
+      color: #ffffff;
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
     }
+    .actions-bar { display: flex; align-items: center; gap: 10px; }
+    .btn {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 9px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: var(--shadow-soft);
+      transition: all 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .btn:hover {
+      border-color: var(--accent);
+      color: var(--text);
+      transform: translateY(-1.5px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), var(--shadow-soft);
+    }
+    .btn:active {
+      transform: scale(0.975);
+      box-shadow: var(--shadow-inset);
+    }
+    .btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .btn-pill { border-radius: 9999px; padding: 10px 22px; }
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7, #0369a1);
+      color: #ffffff !important;
+      font-weight: 700;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      box-shadow: 0 4px 18px rgba(3, 105, 161, 0.35);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #0369a1, #075985);
+      border-color: var(--accent);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    }
+    /* Button-in-Button Trailing Icon Architecture */
+    .btn-icon-circle {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.14);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+      margin-left: 2px;
+    }
+    .btn:hover .btn-icon-circle {
+      transform: translate(2px, -1px) scale(1.08);
+      background: rgba(255, 255, 255, 0.24);
+    }
+    .container {
+      max-width: 1320px;
+      margin: 24px auto 0 auto;
+      padding: 0 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+    .nav-tabs {
+      display: flex;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      overflow-x: auto;
+    }
+    .nav-tab {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 14px;
+      font-weight: 700;
+      padding: 10px 18px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    .nav-tab:hover { color: var(--text); background: var(--panel); }
+    .nav-tab.active {
+      background: var(--card);
+      color: var(--accent);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .section-block {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+    .stat-tile {
+      background: var(--panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+    .stat-val { font-size: 28px; font-weight: 800; letter-spacing: -0.03em; color: var(--text); }
+    .stat-lbl { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--panel);
+    }
+    .badge-movie { border-color: rgba(0, 240, 255, 0.4); color: var(--accent); }
+    .badge-screencast { border-color: rgba(204, 255, 0, 0.4); color: var(--accent-lime); }
+    .badge-podcast { border-color: rgba(245, 158, 11, 0.4); color: var(--accent-amber); }
+    .progress-track {
+      background: var(--panel);
+      height: 12px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 10px 0;
+      box-shadow: var(--shadow-inset);
+      border: 1px solid var(--border-subtle);
+    }
+    .progress-fill {
+      background: linear-gradient(90deg, var(--accent), var(--accent-lime));
+      height: 100%;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+    .directory-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 18px;
+    }
+    .directory-input {
+      flex: 1;
+      min-width: 240px;
+      background: var(--card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 9px 14px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .directory-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+    .sort-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+      font-size: 13px;
+    }
+    .video-card {
+      background: var(--card-outer);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 4px;
+      cursor: pointer;
+      box-shadow: var(--shadow-soft);
+      transition: all 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .video-card-body {
+      background: var(--card-inner);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: var(--shadow-inset);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 14px;
+      height: 100%;
+    }
+    .video-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45), var(--shadow);
+    }
+    .video-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent), 0 12px 30px rgba(0, 0, 0, 0.5);
+    }
+    .video-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .video-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 12px; text-transform: uppercase; }
+    .video-table td { padding: 12px; border-bottom: 1px solid var(--border-subtle); }
+    .video-table tr:hover { background: var(--panel); cursor: pointer; }
+    .short-card {
+      background: var(--panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .short-card:hover { border-color: var(--accent); transform: translateY(-3px); }
+    .short-thumb-box {
+      aspect-ratio: 9/16;
+      background: #000;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .short-thumb-box img { width: 100%; height: 100%; object-fit: cover; }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(3, 5, 8, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      max-width: 720px;
+      width: 100%;
+      padding: 28px;
+      max-height: 88vh;
+      overflow-y: auto;
+      box-shadow: var(--shadow);
+    }
+    .hud-window {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      width: 480px;
+      max-height: 580px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      z-index: 90;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .hud-window.open { display: flex; }
+    .hud-header {
+      background: var(--panel);
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .hud-body { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
   </style>
 </head>
-<body class="min-h-screen flex flex-col custom-scrollbar selection:bg-brand-500 selection:text-white">
+<body>
 
   <!-- Top Navigation Header -->
-  <header class="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-      <div class="flex items-center space-x-3">
-        <div class="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-md">
-          <i data-lucide="sparkles" class="w-5 h-5 text-white"></i>
-        </div>
-        <div>
-          <span class="text-xl font-extrabold tracking-tight text-white">Project Aether</span>
-          <span class="ml-2.5 text-xs font-semibold px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">AI Shorts Studio</span>
-        </div>
+  <header class="header">
+    <div class="header-content">
+      <div class="brand-mark">
+        <span class="brand-badge">AETHER</span>
+        <span>Tronium Content Studio</span>
       </div>
-
-      <!-- GPU Telemetry, Mode Toggle & System Status -->
-      <div class="flex items-center space-x-3">
-        <!-- Operating Mode Switcher -->
-        <button id="modeToggleBtn" onclick="toggleOperatingMode()" title="Toggle between Human Review Queue and 24/7 Autonomous Auto-Pilot" class="flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer bg-purple-500/10 text-purple-400 border-purple-500/30 hover:bg-purple-500/20">
-          <i data-lucide="sliders" class="w-3.5 h-3.5"></i>
-          <span id="modeLabel">REVIEW FIRST</span>
+      <div class="actions-bar">
+        <button class="btn" id="cockpitToggleBtn" onclick="toggleCockpit()">
+          🚀 Mission Control HUD
         </button>
-
-        <!-- YouTube Quota Badge -->
-        <div id="quotaBadge" class="hidden lg:flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
-          <i data-lucide="youtube" class="w-4 h-4 text-red-500"></i>
-          <span class="text-slate-400">Quota:</span>
-          <span id="quotaDisplay" class="font-mono font-medium text-slate-200">0 / 10,000</span>
-        </div>
-
-        <!-- VRAM Chip -->
-        <div id="gpuTelemetry" class="hidden sm:flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
-          <i data-lucide="cpu" class="w-4 h-4 text-emerald-400"></i>
-          <span class="text-slate-400">RTX 5080:</span>
-          <span id="vramUsage" class="font-mono font-medium text-emerald-400">3.6 / 16.3 GB</span>
-          <span class="text-slate-500">|</span>
-          <span id="gpuTemp" class="font-mono text-slate-400">53°C</span>
-        </div>
-
-        <!-- Pipeline Status Badge -->
-        <div id="pipelineStatusBadge" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-          <span id="pipelineStatusText">SYSTEM READY</span>
+        <button class="btn" id="themeToggleBtn" onclick="toggleTheme()">
+          <span id="themeLabel">🌙 Dark</span>
+        </button>
+        <button class="btn" onclick="openModal('settingsModal')">
+          ⚙️ Config
+        </button>
+        <button class="btn" onclick="openModal('licenseModal')">
+          ⚖️ Licensing
+        </button>
+        <div class="badge" id="pipelineStatusBadge" style="color: var(--accent-lime); border-color: var(--accent-lime);">
+          ● READY
         </div>
       </div>
     </div>
   </header>
 
-  <!-- Main Content Layout -->
-  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+  <!-- Main Multi-Spoke Tabbed Canvas -->
+  <main class="container">
 
-    <!-- Hero Introduction -->
-    <section class="glass-card rounded-2xl p-8 border border-slate-800">
-      <div class="max-w-3xl">
-        <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2.5">Autonomous YouTube Shorts Content Studio</h1>
-        <p class="text-base text-slate-400 leading-relaxed">
-          Transform arbitrary 4K long-form video or trending internet topics into mathematically synchronized 9:16 vertical shorts with deterministic A/V sync, kinetic subtitles, and autonomous algorithmic scheduling.
-        </p>
-      </div>
-    </section>
+    <!-- Tab Bar -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" onclick="switchTab('studioTab', this)">
+        🎬 Studio Core (Phases 1–3)
+      </button>
+      <button class="nav-tab" onclick="switchTab('sourcingTab', this)">
+        🌐 Sourcing & Trending Ingest (Spoke 1 & 2)
+      </button>
+      <button class="nav-tab" onclick="switchTab('syndicationTab', this)">
+        🚀 Syndication Suite (Spoke 4)
+      </button>
+      <button class="nav-tab" onclick="switchTab('learnerTab', this)">
+        📈 Retention Learner
+      </button>
+    </nav>
 
-    <!-- Section 1: Ingest Launchpad (Input Video Selector & One-Click Trigger) -->
-    <section class="glass-card rounded-2xl p-6 relative">
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
-            <i data-lucide="video" class="w-6 h-6 text-blue-400"></i>
-            Source Video Ingest
-          </h2>
-          <p class="text-sm text-slate-400 mt-1">Select an input video from <code class="text-xs bg-slate-900 px-2 py-1 rounded text-slate-300 font-mono">data/input_videos/</code> to generate synchronized 9:16 viral shorts.</p>
-        </div>
+    <!-- Tab 1: Studio Core (Source Media & 9:16 Shorts Generation) -->
+    <div id="studioTab" class="tab-pane" style="display: flex; flex-direction: column; gap: 28px;">
 
-        <button id="refreshVideosBtn" class="self-start md:self-auto flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
-          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-          <span>Refresh Files</span>
-        </button>
-      </div>
-
-      <!-- Videos Selection Grid -->
-      <div id="videosGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <!-- Injected via JS -->
-        <div class="animate-pulse bg-slate-800/50 rounded-xl h-24 border border-slate-700/50"></div>
-      </div>
-
-      <!-- Launch Action Bar -->
-      <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-800/80">
-        <div class="text-sm text-slate-400 flex items-center gap-2">
-          <i data-lucide="sparkles" class="w-4 h-4 text-cyan-400"></i>
-          <span>Selected Video: <strong id="selectedVideoLabel" class="text-white font-mono">Brand new day.mkv</strong></span>
-        </div>
-
-        <button id="generateBtn" class="w-full sm:w-auto flex items-center justify-center space-x-2.5 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm shadow-md transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
-          <i data-lucide="zap" class="w-4 h-4 text-yellow-300 fill-yellow-300"></i>
-          <span>⚡ Generate Viral Shorts</span>
-        </button>
-      </div>
-    </section>
-
-    <!-- Section 2: Real-Time Pipeline Progress & Dual Timers -->
-    <section id="pipelineSection" class="glass-card rounded-2xl p-6 relative">
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
-            <i data-lucide="timer" class="w-6 h-6 text-yellow-400"></i>
-            Live Pipeline Timers & Stage Progress
-          </h2>
-          <p class="text-sm text-slate-400 mt-1">Real-time telemetry tracked across subprocess-isolated CUDA phases.</p>
-        </div>
-
-        <!-- Dynamic Stage Badge -->
-        <div id="activeStagePill" class="self-start md:self-auto px-3.5 py-1.5 rounded-full text-xs font-semibold font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
-          STAGE: IDLE
-        </div>
-      </div>
-
-      <!-- Dual Timers Widget -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <!-- Timer 1: Elapsed Stopwatch -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
-          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span class="tracking-wider uppercase font-semibold">ELAPSED TIME</span>
-            <i data-lucide="clock" class="w-3.5 h-3.5 text-blue-400"></i>
+      <!-- Source Media Section with Directory Browser -->
+      <section class="section-block">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">Source Long-Form Media</h2>
+            <p style="font-size: 13px; color: var(--text-muted);">Smart auto-profiling scans duration, framerate, and aspect ratio. Multi-batch memory remembers previously cut intervals.</p>
           </div>
-          <div id="timerElapsed" class="text-4xl font-extrabold font-mono text-white tracking-tight">00:00:00</div>
-          <div class="text-[11px] text-slate-500 mt-1">Running stopwatch</div>
+          <button class="btn" onclick="fetchVideos()">🔄 Refresh Directory</button>
         </div>
 
-        <!-- Timer 2: Countdown to Ready -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
-          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span class="tracking-wider uppercase font-semibold">COUNTDOWN TO COMPLETION</span>
-            <i data-lucide="hourglass" class="w-3.5 h-3.5 text-amber-400"></i>
+        <!-- Directory Browser Bar -->
+        <div class="directory-bar">
+          <span style="font-weight: 700; font-size: 13px;">📁 Directory:</span>
+          <input type="text" id="directoryInput" class="directory-input mono" placeholder="Enter custom video folder path..." value="data/input_videos">
+          <button class="btn btn-primary" id="scanDirBtn" onclick="scanDirectory()">
+            <span>Scan Folder</span>
+            <span class="btn-icon-circle">📁</span>
+          </button>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn quick-folder-btn" style="border-color: var(--accent); color: var(--accent);" onclick="quickFolder('data/input_videos', this)">Default</button>
+            <button class="btn quick-folder-btn" onclick="quickFolder('data/Sample Shorts', this)">Sample Shorts</button>
+            <button class="btn quick-folder-btn" onclick="quickFolder('data/output_shorts', this)">Outputs</button>
           </div>
-          <div id="timerCountdown" class="text-4xl font-extrabold font-mono text-amber-400 tracking-tight">--:--</div>
-          <div id="countdownSub" class="text-[11px] text-slate-500 mt-1">Estimated time remaining</div>
         </div>
 
-        <!-- Telemetry 3: Active Clip Render Status -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
-          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span class="tracking-wider uppercase font-semibold">CLIPS PROCESSED</span>
-            <i data-lucide="film" class="w-3.5 h-3.5 text-emerald-400"></i>
+        <!-- Sorting & View Controls -->
+        <div class="sort-bar">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-weight: 700; color: var(--text-muted);">Sort By:</span>
+            <button class="btn sort-pill-btn" id="sortNameBtn" style="border-color: var(--accent); color: var(--accent);" onclick="setVideoSort('name', this)">Name</button>
+            <button class="btn sort-pill-btn" id="sortDurBtn" onclick="setVideoSort('duration', this)">Duration</button>
+            <button class="btn sort-pill-btn" id="sortSizeBtn" onclick="setVideoSort('size', this)">Size</button>
+            <button class="btn sort-pill-btn" id="sortDateBtn" onclick="setVideoSort('date', this)">Date</button>
           </div>
-          <div id="clipsCountDisplay" class="text-4xl font-extrabold font-mono text-emerald-400 tracking-tight">4 / 4</div>
-          <div class="text-[11px] text-slate-500 mt-1">Viral shorts rendered</div>
-        </div>
-
-        <!-- Telemetry 4: Video Sync Precision -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800/80">
-          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span class="tracking-wider uppercase font-semibold">A/V SYNC DELTA</span>
-            <i data-lucide="activity" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button class="btn view-toggle-btn" id="viewGridBtn" style="border-color: var(--accent); color: var(--accent);" onclick="setVideoView('grid', this)">Grid View</button>
+            <button class="btn view-toggle-btn" id="viewListBtn" onclick="setVideoView('list', this)">List View</button>
           </div>
-          <div class="text-4xl font-extrabold font-mono text-cyan-400 tracking-tight">&lt; 0.33 ms</div>
-          <div class="text-[11px] text-slate-500 mt-1">Deterministic -r 30 sync</div>
-        </div>
-      </div>
-
-      <!-- 3-Phase Stepper Tracker -->
-      <div class="space-y-3">
-        <div class="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
-          <span>PIPELINE EXECUTION STAGES</span>
-          <span id="pipelinePercent" class="font-mono text-blue-400">100% COMPLETE</span>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <!-- Phase 1 Card -->
-          <div id="phaseCard1" class="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 transition-all">
-            <div class="flex items-center justify-between mb-1.5">
-              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-mono">1</span>
-                Phase 1: Whisper ASR
-              </span>
-              <span id="phase1Badge" class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400">DONE</span>
+        <!-- Video Container -->
+        <div id="videoContainer" class="grid-3">
+          <!-- Dynamically populated via JS -->
+        </div>
+
+        <!-- Multi-Batch Extraction Memory Bar -->
+        <div id="extractionMemoryBox" style="margin-top: 20px; padding: 18px; background: var(--panel); border-radius: 12px; border: 1px solid var(--border);">
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700;">
+            <span>Timeline Extraction Memory: <span id="batchCountBadge" style="color: var(--accent);">0 Batches Extracted</span></span>
+            <span id="coverageText" style="color: var(--accent-lime);" class="mono">0.0% Coverage (0 Shorts)</span>
+          </div>
+          <div class="progress-track">
+            <div id="coverageBar" class="progress-fill"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+            <span>Long-form content memory excludes past cut intervals to prevent overlapping scenes.</span>
+            <span id="targetCapacityHint" style="color: var(--accent-cyan);">Supports 30+ non-overlapping shorts across batches</span>
+          </div>
+        </div>
+
+        <!-- Framing Layout Mode Selector (Gold-Standard Reference Shorts) -->
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 18px; padding: 16px 18px; background: var(--panel); border-radius: 14px; border: 1px solid var(--border-subtle);">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-weight: 700; font-size: 13px;">🎬 Framing Engine:</span>
+              <span style="font-size: 12px; color: var(--text-muted);">Layout engine for vertical shorts synthesis</span>
             </div>
-            <p class="text-[11px] text-slate-400">Faster-Whisper on CUDA • Exact word timestamps & language detection</p>
-          </div>
-
-          <!-- Phase 2 Card -->
-          <div id="phaseCard2" class="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 transition-all">
-            <div class="flex items-center justify-between mb-1.5">
-              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center text-[10px] font-mono">2</span>
-                Phase 2: Vision & Editorial
-              </span>
-              <span id="phase2Badge" class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400">DONE</span>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn" id="modeChip3Zone" style="border-color: var(--accent); color: var(--accent); font-weight: 700;" onclick="setFramingMode('CINEMATIC_3ZONE_916')">🎬 3-Zone Cinema 9:16</button>
+              <button class="btn" id="modeChipPan" onclick="setFramingMode('SMART_PORTRAIT_PAN')">📱 Dynamic 9:16 Pan</button>
+              <button class="btn" id="modeChipSquare" onclick="setFramingMode('SQUARE_REACTION_11')">⬛ Square 1:1</button>
             </div>
-            <p class="text-[11px] text-slate-400">Kornia Scene Detection • YOLO-Pose • VLM Narrative Viral Arcs</p>
           </div>
-
-          <!-- Phase 3 Card -->
-          <div id="phaseCard3" class="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 transition-all">
-            <div class="flex items-center justify-between mb-1.5">
-              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <span class="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[10px] font-mono">3</span>
-                Phase 3: Render & Subtitles
-              </span>
-              <span id="phase3Badge" class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400">DONE</span>
-            </div>
-            <p class="text-[11px] text-slate-400">OSQP Trajectory Solver • Kinetic Subtitle Atlas • 9:16 Portrait Compositor</p>
+          <div id="framingDescText" style="font-size: 12px; color: var(--accent); font-weight: 600;">
+            Zone 1: Dual-tone hook headline • Zone 2: Centered 16:9 movie • Zone 3: Context punchline
           </div>
         </div>
-      </div>
-    </section>
 
-    <!-- Section: Human Review & Publication Queue -->
-    <section class="glass-card rounded-2xl p-6">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
-            <i data-lucide="check-check" class="w-6 h-6 text-purple-400"></i>
-            Review Queue & Algorithmic Drops
-          </h2>
-          <p class="text-sm text-slate-400 mt-1">Certified 9:16 shorts awaiting 1-click human verification before scheduled YouTube release.</p>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-xs text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
-            <i data-lucide="clock" class="w-3.5 h-3.5 text-amber-400"></i>
-            <span>Peak Drops: 11:30 AM • 4:30 PM • 8:30 PM</span>
-          </span>
-          <button id="refreshQueueBtn" onclick="fetchReviewQueue()" class="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
-            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-            <span>Refresh Queue</span>
+        <!-- Batch Generation Bar -->
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-weight: 700; font-size: 13px;">Batch Extraction Size:</span>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn batch-chip" data-count="1" onclick="setBatchCount(1)">1</button>
+              <button class="btn batch-chip" data-count="4" id="chip4" style="border-color: var(--accent); color: var(--accent);" onclick="setBatchCount(4)">4</button>
+              <button class="btn batch-chip" data-count="8" onclick="setBatchCount(8)">8</button>
+              <button class="btn batch-chip" data-count="10" onclick="setBatchCount(10)">10</button>
+              <button class="btn batch-chip" data-count="30" onclick="setBatchCount(30)">30</button>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-pill" id="generateBtn" onclick="triggerPipeline()" style="font-size: 14px;">
+            <span>▶ GENERATE BATCH OF <span id="btnBatchNum">4</span> SHORTS</span>
+            <span class="btn-icon-circle">⚡</span>
           </button>
         </div>
-      </div>
+      </section>
 
-      <!-- Review Queue Items Grid -->
-      <div id="reviewQueueGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <!-- Injected via JS -->
-      </div>
-    </section>
+      <!-- Live Pipeline Telemetry -->
+      <section class="section-block">
+        <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 16px;">Live Subprocess Telemetry</h2>
+        <div class="grid-4">
+          <div class="stat-tile">
+            <div class="stat-lbl">SESSION ELAPSED</div>
+            <div class="stat-val mono" id="timerElapsed">00:00:00</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">ESTIMATED REMAINING</div>
+            <div class="stat-val mono" id="timerRemaining" style="color: var(--accent-amber);">--:--</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">BATCH CLIPS</div>
+            <div class="stat-val mono" id="clipsProgress" style="color: var(--accent-lime);">0 / 4</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">ACTIVE STAGE</div>
+            <div class="stat-val mono" id="activeStageText" style="font-size: 18px; color: var(--accent);">IDLE</div>
+          </div>
+        </div>
+      </section>
 
-    <!-- Section: Real-Time Trending Radar -->
-    <section class="glass-card rounded-2xl p-6">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-        <div>
-          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
-            <i data-lucide="trending-up" class="w-6 h-6 text-pink-400"></i>
-            Trending Radar (Google Trends & Viral Signals)
-          </h2>
-          <p class="text-sm text-slate-400 mt-1">High-velocity viral topics vetted for safety and Creative Commons licensing.</p>
+      <!-- Certified 9:16 Shorts Collections Gallery -->
+      <section class="section-block">
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 16px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">Certified 9:16 Shorts Collections</h2>
+            <p style="font-size: 13px; color: var(--text-muted);">Organized by source video, ready for 1-click vertical streaming and syndication.</p>
+          </div>
+          <button class="btn" onclick="fetchShorts()">🔄 Refresh Gallery</button>
         </div>
 
-        <button onclick="fetchTrends()" class="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
-          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-          <span>Scan Trends</span>
-        </button>
-      </div>
-
-      <!-- Trends Pills -->
-      <div id="trendsContainer" class="flex flex-wrap gap-2.5">
-        <!-- Injected via JS -->
-      </div>
-    </section>
-
-    <!-- Section 3: Browsable Shorts Showcase Gallery -->
-    <section class="glass-card rounded-2xl p-6">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 class="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
-            <i data-lucide="clapperboard" class="w-6 h-6 text-emerald-400"></i>
-            Rendered Shorts Gallery
-          </h2>
-          <p class="text-sm text-slate-400 mt-1">Browse, stream in 9:16 vertical player, inspect metadata, and download finished shorts.</p>
+        <!-- Filter & Search Controls -->
+        <div class="sort-bar">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;" id="collectionTabs">
+            <button class="btn collection-filter-btn" style="border-color: var(--accent); color: var(--accent);" onclick="filterCollection('all', this)">All Shorts</button>
+            <button class="btn collection-filter-btn" onclick="filterCollection('review', this)">Review Pending</button>
+            <button class="btn collection-filter-btn" onclick="filterCollection('movie', this)">By Movie</button>
+          </div>
+          <input type="text" id="shortsSearch" placeholder="Search shorts by title..." class="directory-input" style="max-width: 260px;" oninput="searchShorts(this.value)">
         </div>
 
-        <button id="refreshShortsBtn" class="self-start sm:self-auto flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition">
-          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-          <span>Reload Shorts</span>
-        </button>
-      </div>
-
-      <!-- Shorts Grid -->
-      <div id="shortsGallery" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <!-- Injected via JS -->
-      </div>
-    </section>
-
-    <!-- Section 4: Live Log Console Drawer -->
-    <section class="glass-card rounded-2xl p-5">
-      <button type="button" aria-expanded="true" aria-controls="logContainer" aria-label="Toggle live pipeline event log" class="w-full flex items-center justify-between cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-cyan-500 rounded-lg p-1 bg-transparent border-0" onclick="toggleLogs()">
-        <div class="flex items-center space-x-2 text-xs font-semibold text-slate-300">
-          <i data-lucide="terminal" class="w-4 h-4 text-cyan-400"></i>
-          <span>Live Pipeline Event Log</span>
+        <div id="shortsGallery" class="grid-4">
+          <!-- Dynamically populated via JS -->
         </div>
-        <i id="logChevron" data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transition-transform"></i>
-      </button>
-      <div id="logContainer" class="mt-4 bg-slate-950 rounded-xl p-3 border border-slate-800/80 font-mono text-xs text-slate-400 h-44 overflow-y-auto custom-scrollbar space-y-1">
-        <div class="text-slate-500">[System] Initializing Project Aether Studio Dashboard...</div>
-      </div>
-    </section>
+      </section>
+    </div>
+
+    <!-- Tab 2: Sourcing & Trending Ingest (Spoke 1 & 2) -->
+    <div id="sourcingTab" class="tab-pane" style="display: none; flex-direction: column; gap: 28px;">
+
+      <!-- Direct YouTube URL Download -->
+      <section class="section-block">
+        <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px;">Direct Long-Form Video Ingest (yt-dlp)</h2>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">Paste any public long-form YouTube URL (minimum 1080p, 30fps). Downloads directly into input_videos.</p>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+          <input type="url" id="directYtUrl" placeholder="https://www.youtube.com/watch?v=..." class="directory-input mono">
+          <button class="btn btn-primary btn-pill" id="downloadDirectYtBtn" onclick="downloadDirectYt()">
+            <span>⬇ Download Video</span>
+            <span class="btn-icon-circle">⚡</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Google Trends Breakout Radar -->
+      <section class="section-block">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">Google Trends Real-Time Radar</h2>
+            <p style="font-size: 13px; color: var(--text-muted);">Autonomous breakout search topics filtered through sensitive content guardrails.</p>
+          </div>
+          <button class="btn" onclick="fetchTrends()">🔄 Refresh Trends</button>
+        </div>
+        <div id="trendsList" class="grid-2">
+          <!-- Populated via JS -->
+        </div>
+      </section>
+
+      <!-- Candidate Videos with Replay Heatmaps -->
+      <section class="section-block">
+        <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px;">Candidate Long-Form Videos & Replay Heatmaps</h2>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 18px;">Select a trending query to inspect candidate videos and their viewer retention peaks.</p>
+        <div id="candidateVideosList" class="grid-3">
+          <div style="color: var(--text-muted); font-size: 13px;">Click any trending topic above to discover candidate videos.</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Tab 3: Syndication Suite (Spoke 4) -->
+    <div id="syndicationTab" class="tab-pane" style="display: none; flex-direction: column; gap: 28px;">
+
+      <!-- Human Review Queue -->
+      <section class="section-block">
+        <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 14px;">Human Review Queue</h2>
+        <div id="reviewQueueList" style="display: flex; flex-direction: column; gap: 14px;">
+          <!-- Populated via JS -->
+        </div>
+      </section>
+
+      <!-- Multi-Platform Packaging Inspector -->
+      <section class="section-block">
+        <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px;">Multi-Platform Syndication Packaging</h2>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 18px;">Generated SEO metadata tailored for YouTube Shorts, TikTok FYP tags, and Instagram Reels descriptions.</p>
+
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px;">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn platform-tab-btn" id="tabYtBtn" style="border-color: var(--accent); color: var(--accent);" onclick="switchSyndicationPlatform('youtube')">YouTube Shorts</button>
+            <button class="btn platform-tab-btn" id="tabTtBtn" onclick="switchSyndicationPlatform('tiktok')">TikTok FYP</button>
+            <button class="btn platform-tab-btn" id="tabIgBtn" onclick="switchSyndicationPlatform('instagram')">Instagram Reels</button>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="copyCurrentSyndication()"><span>📋 Copy All</span></button>
+            <button class="btn" onclick="copyField('title')">Copy Title</button>
+            <button class="btn" onclick="copyField('caption')">Copy Caption</button>
+            <button class="btn" onclick="copyField('tags')">Copy Tags</button>
+          </div>
+        </div>
+
+        <div id="syndicationDisplay" style="background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; font-size: 13px; line-height: 1.6; white-space: pre-wrap;" class="mono">
+Select a short in the Review Queue or Gallery to view its multi-platform packaging.
+        </div>
+      </section>
+    </div>
+
+    <!-- Tab 4: Retention Learner -->
+    <div id="learnerTab" class="tab-pane" style="display: none; flex-direction: column; gap: 28px;">
+      <section class="section-block">
+        <h2 style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px;">Closed-Loop Retention Analytics</h2>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 18px;">Ingests audience retention graphs. High performers (APV $\ge$ 85%) graduate into few-shot editorial exemplars.</p>
+        <div id="analyticsContent" class="grid-2">
+          <!-- Populated via JS -->
+        </div>
+      </section>
+    </div>
 
   </main>
 
-  <!-- Video Player Modal -->
-  <div id="videoModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl relative flex flex-col items-center p-4">
-      <button onclick="closeVideoModal()" type="button" aria-label="Close video player" class="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-slate-800/80 hover:bg-slate-700 flex items-center justify-center text-slate-300 hover:text-white transition cursor-pointer">
-        <i data-lucide="x" class="w-5 h-5"></i>
-      </button>
-
-      <h3 id="modalVideoTitle" class="text-sm font-semibold text-white mb-3 pr-10 text-center truncate w-full">Short Playback</h3>
-
-      <div class="w-[270px] h-[480px] bg-black rounded-xl overflow-hidden shadow-inner flex items-center justify-center relative">
-        <video id="modalVideoPlayer" controls autoplay muted loop playsinline class="w-full h-full object-contain">
-          <source src="" type="video/mp4">
-          Your browser does not support the video tag.
-        </video>
+  <!-- Mission Control HUD Cockpit Window -->
+  <aside id="cockpitWindow" class="hud-window" role="dialog" aria-modal="true" aria-label="Mission Control Telemetry HUD">
+    <div class="hud-header">
+      <div style="font-weight: 800; font-size: 14px; display: flex; align-items: center; gap: 8px;">
+        <span style="color: var(--accent-lime);">⚡</span>
+        <span>MISSION CONTROL HUD</span>
       </div>
+      <button class="btn" onclick="toggleCockpit()" aria-label="Close Mission Control HUD" style="padding: 4px 8px;">✕</button>
+    </div>
+    <div class="hud-body">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-weight: 700; font-size: 13px;">Pulse Engine:</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="badge" id="hudPulseBadge" style="color: var(--accent-lime);">IDLE (Next in 28m)</span>
+          <button class="btn" style="padding: 4px 10px; font-size: 11px;" onclick="togglePulseEngine()">⏯️ Pause/Resume</button>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="hud-tile" style="display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div class="stat-lbl">DAILY YOUTUBE QUOTA</div>
+            <div class="stat-val mono" id="hudQuotaNum" style="font-size: 20px;">0 / 10k</div>
+          </div>
+          <svg width="44" height="44" viewBox="0 0 36 36">
+            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--border-subtle)" stroke-width="3.5" />
+            <path id="hudQuotaRadial" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round" />
+          </svg>
+        </div>
+        <div class="hud-tile" style="display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div class="stat-lbl">RTX 5080 VRAM</div>
+            <div class="stat-val mono" id="hudVramNum" style="font-size: 20px;">3.6 / 16G</div>
+          </div>
+          <svg width="44" height="44" viewBox="0 0 36 36">
+            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--border-subtle)" stroke-width="3.5" />
+            <path id="hudVramRadial" stroke-dasharray="22, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--accent-lime)" stroke-width="3.5" stroke-linecap="round" />
+          </svg>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="hud-tile">
+          <div class="stat-lbl">VIDEOS INGESTED</div>
+          <div class="stat-val mono" id="hudVideosCount">0</div>
+        </div>
+        <div class="hud-tile">
+          <div class="stat-lbl">SHORTS CERTIFIED</div>
+          <div class="stat-val mono" id="hudShortsCount">0</div>
+        </div>
+      </div>
+      <div class="hud-tile">
+        <div class="stat-lbl">HARDWARE STATUS & THERMALS</div>
+        <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; margin-top: 6px;">
+          <span id="hudVramText" class="mono">RTX 5080 Laptop GPU</span>
+          <span id="hudTempText" class="mono" style="color: var(--accent-lime);">Temp: 53°C (SAFE)</span>
+        </div>
+      </div>
+      <div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div class="stat-lbl">LIVE EVENT LOGS</div>
+          <div style="display: flex; gap: 4px;">
+            <button class="btn log-filter-btn" data-level="ALL" style="padding: 4px 8px; font-size: 11px; border-color: var(--accent); color: var(--accent);" onclick="filterHudLogs('ALL')">ALL</button>
+            <button class="btn log-filter-btn" data-level="INFO" style="padding: 4px 8px; font-size: 11px;" onclick="filterHudLogs('INFO')">INFO</button>
+            <button class="btn log-filter-btn" data-level="WARN" style="padding: 4px 8px; font-size: 11px;" onclick="filterHudLogs('WARN')">WARN</button>
+            <button class="btn log-filter-btn" data-level="SUCCESS" style="padding: 4px 8px; font-size: 11px;" onclick="filterHudLogs('SUCCESS')">SUCCESS</button>
+            <button class="btn" style="padding: 4px 8px; font-size: 11px;" onclick="clearHudLogs()" title="Clear Logs">🗑️</button>
+          </div>
+        </div>
+        <div id="hudLogStream" style="background: var(--panel); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px; font-size: 11px; max-height: 140px; overflow-y: auto;" class="mono" aria-live="polite">
+          <!-- Logs injected via JS -->
+        </div>
+      </div>
+    </div>
+  </aside>
 
-      <div class="mt-4 flex items-center justify-between w-full px-2 text-xs text-slate-400">
-        <span id="modalVideoMeta">1080x1920 • 9:16 Vertical</span>
-        <a id="modalDownloadBtn" href="#" download class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition">
-          <i data-lucide="download" class="w-3.5 h-3.5"></i>
-          <span>Download</span>
-        </a>
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal-overlay">
+    <div class="modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h3 style="font-size: 18px; font-weight: 800;">Studio Configuration</h3>
+        <button class="btn" onclick="closeModal('settingsModal')">✕</button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div>
+          <label style="font-weight: 700; font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">DEFAULT BATCH SIZE (1-30)</label>
+          <input type="number" id="cfgBatchSize" class="directory-input" min="1" max="30" value="4">
+        </div>
+        <div>
+          <label style="font-weight: 700; font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">VLM NARRATIVE PERSONA</label>
+          <select id="cfgPersona" class="directory-input">
+            <option value="VIRAL_HOOK">Viral Hook & Curiosity Gap</option>
+            <option value="CINEMATIC_DRAMA">Cinematic Drama & Stakes</option>
+            <option value="FAST_PACED">Fast-Paced Banter</option>
+            <option value="TECH_DEMO">Tech Screencast Demo</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-weight: 700; font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">WHISPER LANGUAGE</label>
+          <select id="cfgLanguage" class="directory-input">
+            <option value="auto">Native Auto-Detect (99+ Languages)</option>
+            <option value="en">English (en)</option>
+            <option value="es">Spanish (es)</option>
+            <option value="fr">French (fr)</option>
+            <option value="de">German (de)</option>
+            <option value="hi">Hindi (hi)</option>
+            <option value="ja">Japanese (ja)</option>
+            <option value="zh">Chinese (zh)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-weight: 700; font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">AUDIO BGM SPEECH DUCKING</label>
+          <input type="range" id="cfgDucking" min="-30" max="-6" value="-18" style="width: 100%;">
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Ducks music to -18 dB during active dialogue.</div>
+        </div>
+        <button class="btn btn-primary" onclick="saveSettings()" style="margin-top: 10px; justify-content: center;">Save Configuration</button>
       </div>
     </div>
   </div>
 
-  <!-- Application Logic -->
+  <!-- Licensing Modal -->
+  <div id="licenseModal" class="modal-overlay">
+    <div class="modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
+        <h3 style="font-size: 18px; font-weight: 800;">Licensing & Transparency Disclosures</h3>
+        <button class="btn" onclick="closeModal('licenseModal')">✕</button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 14px; font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+        <div><strong style="color: var(--text);">1. MIT Open Source License:</strong> Project Aether core pipelines are fully open source and run locally.</div>
+        <div><strong style="color: var(--text);">2. Creative Commons (CC-BY 4.0):</strong> Mandatory attribution strings are automatically appended to exports.</div>
+        <div><strong style="color: var(--text);">3. Transformative Fair Use (17 U.S.C. § 107):</strong> Dynamic 9:16 vertical cinematography, kinetic subtitles, and analysis commentary.</div>
+        <div><strong style="color: var(--text);">4. Zero Data Leak Guarantee:</strong> All AI inference executes strictly on your local NVIDIA GPU. No credentials leave your machine.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9:16 Player Modal -->
+  <div id="playerModal" class="modal-overlay">
+    <div class="modal-box" style="max-width: 400px; text-align: center;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h3 id="playerTitle" style="font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Short Playback</h3>
+        <button class="btn" onclick="closeModal('playerModal')">✕</button>
+      </div>
+      <div style="aspect-ratio: 9/16; background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 14px;">
+        <video id="playerVideo" controls autoplay muted loop playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span id="playerMeta" style="font-size: 12px; color: var(--text-muted);" class="mono">1080x1920 • 9:16</span>
+        <a id="playerDownloadBtn" href="#" download class="btn btn-primary">Download Short</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Frontend Reactive Application Script -->
   <script>
+    let currentFolder = "data/input_videos";
+    let videoList = [];
+    let shortsList = [];
     let selectedVideo = "Brand new day.mkv";
-    let statusInterval = null;
-    let timerTickInterval = null;
-    let pipelineStartTime = null;
-    let estimatedTotalSeconds = 270.0;
-    let currentPipelineStatus = "idle";
+    let activeBatchCount = 4;
+    let activeFramingMode = "CINEMATIC_3ZONE_916";
+    let videoSortBy = "name";
+    let videoViewMode = "grid";
+    let currentSyndicationPkg = null;
+    let activeSyndicationPlatform = "youtube";
 
     document.addEventListener("DOMContentLoaded", () => {
-      lucide.createIcons();
+      initTheme();
       fetchVideos();
       fetchShorts();
-      fetchOperatingMode();
-      fetchQuota();
-      fetchReviewQueue();
-      fetchTrends();
-      startPolling();
-
-      document.getElementById("generateBtn").addEventListener("click", triggerPipeline);
-      document.getElementById("refreshVideosBtn").addEventListener("click", fetchVideos);
-      document.getElementById("refreshShortsBtn").addEventListener("click", fetchShorts);
+      fetchTelemetry();
+      setInterval(fetchTelemetry, 2500);
     });
 
-    // ── Fetch Videos ──
+    function setFramingMode(mode) {
+      activeFramingMode = mode;
+      const descEl = document.getElementById("framingDescText");
+      if (mode === "CINEMATIC_3ZONE_916") {
+        if (descEl) descEl.innerText = "Zone 1: Dual-tone hook headline • Zone 2: Centered 16:9 movie • Zone 3: Context punchline";
+        showToast("Framing: 3-Zone Cinema 9:16 (Top Hook + Center Movie)", "info");
+      } else if (mode === "SMART_PORTRAIT_PAN") {
+        if (descEl) descEl.innerText = "Dynamic 9:16 Full-Bleed Pan with 2D OSQP virtual camera trajectory & tripod stabilization";
+        showToast("Framing: Dynamic 9:16 Pan (OSQP Pursuit)", "info");
+      } else if (mode === "SQUARE_REACTION_11") {
+        if (descEl) descEl.innerText = "1:1 Square Reaction crop centered on character reactions and intense dialogue";
+        showToast("Framing: Square 1:1 Reaction Mode", "info");
+      }
+      document.getElementById("modeChip3Zone").style.borderColor = (mode === "CINEMATIC_3ZONE_916") ? "var(--accent)" : "var(--border-subtle)";
+      document.getElementById("modeChip3Zone").style.color = (mode === "CINEMATIC_3ZONE_916") ? "var(--accent)" : "var(--text-muted)";
+      document.getElementById("modeChipPan").style.borderColor = (mode === "SMART_PORTRAIT_PAN") ? "var(--accent)" : "var(--border-subtle)";
+      document.getElementById("modeChipPan").style.color = (mode === "SMART_PORTRAIT_PAN") ? "var(--accent)" : "var(--text-muted)";
+      document.getElementById("modeChipSquare").style.borderColor = (mode === "SQUARE_REACTION_11") ? "var(--accent)" : "var(--border-subtle)";
+      document.getElementById("modeChipSquare").style.color = (mode === "SQUARE_REACTION_11") ? "var(--accent)" : "var(--text-muted)";
+    }
+
+    function initTheme() {
+      const saved = localStorage.getItem("aether-theme") || "dark";
+      setTheme(saved);
+    }
+
+    function toggleTheme() {
+      const cur = document.documentElement.getAttribute("data-theme") || "dark";
+      const next = cur === "dark" ? "light" : "dark";
+      setTheme(next);
+      showToast(`Switched to ${next} mode`, "info");
+    }
+
+    function setTheme(t) {
+      document.documentElement.setAttribute("data-theme", t);
+      localStorage.setItem("aether-theme", t);
+      document.getElementById("themeLabel").innerText = (t === "dark") ? "🌙 Dark" : "☀️ Light";
+    }
+
+    function switchTab(tabId, btn) {
+      document.querySelectorAll(".tab-pane").forEach(el => el.style.display = "none");
+      document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
+      document.getElementById(tabId).style.display = "flex";
+      btn.classList.add("active");
+
+      if (tabId === "sourcingTab") fetchTrends();
+      if (tabId === "syndicationTab") fetchReviewQueue();
+      if (tabId === "learnerTab") fetchAnalytics();
+    }
+
+    function openModal(id) { document.getElementById(id).classList.add("open"); }
+    function closeModal(id) {
+      document.getElementById(id).classList.remove("open");
+      if (id === "playerModal") {
+        const v = document.getElementById("playerVideo");
+        v.pause();
+        v.src = "";
+      }
+    }
+
+    function toggleCockpit() {
+      document.getElementById("cockpitWindow").classList.toggle("open");
+    }
+
+    function quickFolder(fPath, btn) {
+      document.getElementById("directoryInput").value = fPath;
+      currentFolder = fPath;
+      document.querySelectorAll(".quick-folder-btn").forEach(b => {
+        b.style.borderColor = "var(--border-subtle)";
+        b.style.color = "var(--text-muted)";
+      });
+      if (btn) {
+        btn.style.borderColor = "var(--accent)";
+        btn.style.color = "var(--accent)";
+      }
+      showToast(`Scanning directory: ${fPath}`, "info");
+      scanDirectory();
+    }
+
+    async function scanDirectory() {
+      const scanBtn = document.getElementById("scanDirBtn");
+      if (scanBtn) {
+        scanBtn.disabled = true;
+        scanBtn.innerHTML = `<span>Scanning...</span><span class="btn-icon-circle">⏳</span>`;
+      }
+      currentFolder = document.getElementById("directoryInput").value.trim();
+      await fetchVideos();
+      if (scanBtn) {
+        scanBtn.disabled = false;
+        scanBtn.innerHTML = `<span>Scan Folder</span><span class="btn-icon-circle">📁</span>`;
+      }
+      showToast(`Scanned ${videoList.length} videos from folder`, "success");
+    }
+
     async function fetchVideos() {
       try {
-        const res = await fetch("/api/videos");
-        const data = await res.json();
-        const grid = document.getElementById("videosGrid");
-        grid.innerHTML = "";
+        const res = await fetch(`/api/videos?folder=${encodeURIComponent(currentFolder)}`);
+        const d = await res.json();
+        videoList = d.videos || [];
+        renderVideos();
+        if (selectedVideo) fetchExtractionMemory(selectedVideo);
+      } catch (e) {
+        console.warn("fetchVideos error:", e);
+      }
+    }
 
-        if (!data.videos || data.videos.length === 0) {
-          grid.innerHTML = `<div class="col-span-full p-4 text-center text-slate-500 text-sm">No video files found in data/input_videos.</div>`;
-          return;
-        }
+    function setVideoSort(type, btn) {
+      videoSortBy = type;
+      document.querySelectorAll(".sort-pill-btn").forEach(b => {
+        b.style.borderColor = "var(--border-subtle)";
+        b.style.color = "var(--text-muted)";
+      });
+      if (btn) {
+        btn.style.borderColor = "var(--accent)";
+        btn.style.color = "var(--accent)";
+      }
+      renderVideos();
+      showToast(`Sorted by: ${type}`, "info");
+    }
 
-        data.videos.forEach(v => {
-          const isSelected = v.filename === selectedVideo;
+    function setVideoView(view, btn) {
+      videoViewMode = view;
+      document.querySelectorAll(".view-toggle-btn").forEach(b => {
+        b.style.borderColor = "var(--border-subtle)";
+        b.style.color = "var(--text-muted)";
+      });
+      if (btn) {
+        btn.style.borderColor = "var(--accent)";
+        btn.style.color = "var(--accent)";
+      }
+      renderVideos();
+      showToast(`Layout: ${view} view`, "info");
+    }
+
+    function renderVideos() {
+      const container = document.getElementById("videoContainer");
+      container.innerHTML = "";
+
+      let sorted = [...videoList];
+      if (videoSortBy === "name") sorted.sort((a,b) => a.filename.localeCompare(b.filename));
+      if (videoSortBy === "duration") sorted.sort((a,b) => b.duration - a.duration);
+      if (videoSortBy === "size") sorted.sort((a,b) => b.size_bytes - a.size_bytes);
+      if (videoSortBy === "date") sorted.sort((a,b) => (b.modified_at || 0) - (a.modified_at || 0));
+
+      if (sorted.length === 0) {
+        container.innerHTML = `<div style="grid-column: 1/-1; padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px;">No video files (.mp4, .mkv, .mov, .webm) found in this folder.</div>`;
+        return;
+      }
+
+      if (videoViewMode === "list") {
+        container.className = "section-block";
+        let tableHtml = `
+          <table class="video-table">
+            <thead>
+              <tr>
+                <th>Video Filename</th>
+                <th>Classification Profile</th>
+                <th>Duration</th>
+                <th>Size</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        sorted.forEach(v => {
+          const isSel = (v.filename === selectedVideo);
+          const p = v.content_profile || { label: "General Video", type: "GENERAL" };
+          tableHtml += `
+            <tr onclick="selectVideo('${v.filename}')" style="${isSel ? 'background: var(--panel); font-weight: 700;' : ''}">
+              <td class="mono">${v.filename}</td>
+              <td><span class="badge badge-movie">${p.label}</span></td>
+              <td class="mono">${v.duration_formatted}</td>
+              <td class="mono">${v.size_mb} MB</td>
+              <td><span style="color: var(--accent); font-weight: 700;">${isSel ? '● Active' : 'Select'}</span></td>
+            </tr>
+          `;
+        });
+        tableHtml += `</tbody></table>`;
+        container.innerHTML = tableHtml;
+      } else {
+        container.className = "grid-3";
+        sorted.forEach(v => {
+          const isSel = (v.filename === selectedVideo);
+          const p = v.content_profile || { label: "General Video", type: "GENERAL", description: "" };
+          let badgeClass = "badge-movie";
+          if (p.type === "TECH_SCREENCAST") badgeClass = "badge-screencast";
+          if (p.type === "PODCAST_INTERVIEW") badgeClass = "badge-podcast";
+
           const card = document.createElement("div");
-          card.className = `cursor-pointer p-4 rounded-xl border transition-all ${
-            isSelected
-              ? "glass-card-active border-blue-500/60"
-              : "glass-card hover:border-slate-700"
-          }`;
+          card.className = `video-card ${isSel ? 'selected' : ''}`;
           card.onclick = () => selectVideo(v.filename);
           card.innerHTML = `
-            <div class="flex items-start justify-between">
-              <div class="flex items-center space-x-2.5">
-                <i data-lucide="file-video" class="w-5 h-5 ${isSelected ? 'text-blue-400' : 'text-slate-400'}"></i>
-                <div>
-                  <h4 class="text-sm font-semibold text-white truncate max-w-[180px]">${v.filename}</h4>
-                  <div class="text-[11px] text-slate-400 mt-0.5">${v.width}x${v.height} • ${v.codec.toUpperCase()}</div>
-                </div>
-              </div>
-              <span class="text-xs font-mono font-medium text-slate-300 bg-slate-800/80 px-2.5 py-1 rounded">${v.size_mb} MB</span>
-            </div>
-            <div class="mt-3 flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/60">
-              <span>Duration: <strong class="text-slate-300 font-mono">${v.duration_formatted}</strong></span>
-              <span class="text-[10px] text-blue-400 font-medium">${isSelected ? '● SELECTED' : 'Click to select'}</span>
-            </div>
-          `;
-          grid.appendChild(card);
-        });
-        lucide.createIcons();
-      } catch (err) {
-        console.error("Failed to load videos:", err);
-      }
-    }
-
-    function selectVideo(filename) {
-      selectedVideo = filename;
-      document.getElementById("selectedVideoLabel").textContent = filename;
-      fetchVideos();
-    }
-
-    // ── Fetch Rendered Shorts ──
-    async function fetchShorts() {
-      try {
-        const res = await fetch("/api/shorts");
-        const data = await res.json();
-        const gallery = document.getElementById("shortsGallery");
-        gallery.innerHTML = "";
-
-        if (!data.shorts || data.shorts.length === 0) {
-          gallery.innerHTML = `<div class="col-span-full py-12 text-center text-slate-500 text-sm">No shorts rendered yet. Launch the pipeline to generate shorts.</div>`;
-          return;
-        }
-
-        document.getElementById("clipsCountDisplay").textContent = `${data.shorts.length} / 4`;
-
-        data.shorts.forEach(s => {
-          const card = document.createElement("div");
-          card.className = "glass-card rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500/40 transition group flex flex-col";
-
-          const thumbSrc = s.thumbnail_url || "";
-          const safeTitle = s.title.replace(/"/g, '&quot;').replace(/'/g, "\\'");
-          card.innerHTML = `
-            <button type="button" aria-label="Play ${safeTitle}" class="relative w-full aspect-[9/16] bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center border-0 p-0 text-left focus:outline-none focus:ring-2 focus:ring-blue-500" onclick="openVideoModal('${s.video_url}', '${safeTitle}', '${s.duration_seconds}')">
-              ${thumbSrc ? `<img src="${thumbSrc}" alt="Thumbnail for ${safeTitle}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">` : `<i data-lucide="play-circle" class="w-12 h-12 text-slate-600"></i>`}
-              <div class="absolute inset-0 bg-black/40 group-hover:bg-black/20 flex items-center justify-center transition">
-                <div class="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center shadow-lg transform group-hover:scale-110 transition">
-                  <i data-lucide="play" class="w-5 h-5 fill-current ml-0.5"></i>
-                </div>
-              </div>
-              <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[11px] font-mono text-white bg-slate-950/80 px-2.5 py-1 rounded backdrop-blur">
-                <span>⏱ ${s.duration_seconds}s</span>
-                <span class="text-emerald-400 font-bold">Δ ${s.sync_delta_ms}ms</span>
-              </div>
-            </button>
-
-            <div class="p-4 flex-1 flex flex-col justify-between">
+            <div class="video-card-body">
               <div>
-                <div class="flex items-center justify-between text-xs mb-1">
-                  <span class="font-bold text-blue-400">Short ${s.clip_index}</span>
-                  <span class="font-mono text-slate-400 text-[11px]">${s.size_mb} MB</span>
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                  <span class="badge ${badgeClass}">${p.label}</span>
+                  <span class="mono" style="font-size: 11px; color: var(--text-muted);">${v.codec || 'avc'}</span>
                 </div>
-                <h4 class="text-sm font-semibold text-white line-clamp-2 title-hover">${s.title}</h4>
+                <div style="font-weight: 800; font-size: 14px; margin-bottom: 6px; word-break: break-all;">${v.filename}</div>
+                <div style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">${p.description}</div>
               </div>
-
-              <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
-                <div class="text-[11px] text-slate-400 font-mono">1080x1920 (9:16)</div>
-                <a href="${s.video_url}" download class="text-xs flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition">
-                  <i data-lucide="download" class="w-3.5 h-3.5"></i>
-                  <span>MP4</span>
-                </a>
+              <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 10px; font-size: 12px;">
+                <span class="mono" style="color: var(--text-muted);">${v.duration_formatted} • ${v.size_mb} MB</span>
+                <span style="color: var(--accent); font-weight: 800;">${isSel ? '● ACTIVE' : 'SELECT'}</span>
               </div>
-            </div>
-          `;
-          gallery.appendChild(card);
-        });
-        lucide.createIcons();
-      } catch (err) {
-        console.error("Failed to load shorts:", err);
-      }
-    }
-
-    // ── Polling & Real-Time Status ──
-    function startPolling() {
-      if (statusInterval) clearInterval(statusInterval);
-      pollStatus();
-      statusInterval = setInterval(pollStatus, 2500);
-
-      if (timerTickInterval) clearInterval(timerTickInterval);
-      timerTickInterval = setInterval(updateLocalTimers, 1000);
-    }
-
-    async function pollStatus() {
-      try {
-        const res = await fetch("/api/status");
-        const data = await res.json();
-
-        currentPipelineStatus = data.status;
-        if (data.pipeline_start_time) {
-          pipelineStartTime = data.pipeline_start_time;
-        }
-
-        // Update GPU chip
-        if (data.gpu) {
-          document.getElementById("vramUsage").textContent = `${(data.gpu.used_mb / 1024).toFixed(1)} / ${(data.gpu.total_mb / 1024).toFixed(1)} GB`;
-          document.getElementById("gpuTemp").textContent = `${data.gpu.temp_c}°C`;
-        }
-
-        // Update status badge
-        const badge = document.getElementById("pipelineStatusBadge");
-        const statusText = document.getElementById("pipelineStatusText");
-        const stagePill = document.getElementById("activeStagePill");
-
-        if (data.status === "processing") {
-          badge.className = "flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
-          statusText.textContent = "PIPELINE ACTIVE";
-          stagePill.textContent = `STAGE: ${data.current_stage.toUpperCase()}`;
-          stagePill.className = "self-start md:self-auto px-3 py-1 rounded-full text-xs font-semibold font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse";
-          document.getElementById("generateBtn").disabled = true;
-        } else {
-          badge.className = "flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-          statusText.textContent = "SYSTEM READY";
-          stagePill.textContent = "STAGE: COMPLETED / IDLE";
-          stagePill.className = "self-start md:self-auto px-3 py-1 rounded-full text-xs font-semibold font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-          document.getElementById("generateBtn").disabled = false;
-        }
-
-        // Update stage cards
-        updateStageCards(data.current_stage, data.status);
-
-        // Update logs
-        if (data.recent_logs && data.recent_logs.length > 0) {
-          const logBox = document.getElementById("logContainer");
-          logBox.innerHTML = "";
-          data.recent_logs.forEach(l => {
-            const row = document.createElement("div");
-            row.innerHTML = `<span class="text-slate-500">[${l.time}]</span> <span class="text-blue-400">${l.level}:</span> <span class="text-slate-300">${l.message}</span>`;
-            logBox.appendChild(row);
-          });
-        }
-      } catch (err) {
-        console.warn("Status poll blip:", err);
-      }
-    }
-
-    function updateLocalTimers() {
-      if (currentPipelineStatus === "processing" && pipelineStartTime) {
-        const now = Date.now() / 1000;
-        const elapsed = Math.max(0, now - pipelineStartTime);
-        const rem = Math.max(0, estimatedTotalSeconds - elapsed);
-
-        document.getElementById("timerElapsed").textContent = formatTime(elapsed);
-        document.getElementById("timerCountdown").textContent = formatTime(rem);
-        document.getElementById("countdownSub").textContent = `ETA countdown (${Math.round(rem)}s remaining)`;
-      } else if (currentPipelineStatus !== "processing") {
-        document.getElementById("timerCountdown").textContent = "00:00";
-        document.getElementById("countdownSub").textContent = "Pipeline idle or finished";
-      }
-    }
-
-    function formatTime(totalSec) {
-      const m = Math.floor(totalSec / 60);
-      const s = Math.floor(totalSec % 60);
-      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    }
-
-    function updateStageCards(stage, status) {
-      const c1 = document.getElementById("phaseCard1");
-      const c2 = document.getElementById("phaseCard2");
-      const c3 = document.getElementById("phaseCard3");
-      const b1 = document.getElementById("phase1Badge");
-      const b2 = document.getElementById("phase2Badge");
-      const b3 = document.getElementById("phase3Badge");
-
-      if (status !== "processing") {
-        b1.textContent = "DONE"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
-        b2.textContent = "DONE"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
-        b3.textContent = "DONE"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
-        return;
-      }
-
-      if (stage === "phase1_asr") {
-        b1.textContent = "RUNNING"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-amber-500/10 text-amber-400 animate-pulse";
-        b2.textContent = "QUEUED"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-slate-800 text-slate-500";
-        b3.textContent = "QUEUED"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-slate-800 text-slate-500";
-      } else if (stage === "phase2_vlm_editorial") {
-        b1.textContent = "DONE"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
-        b2.textContent = "RUNNING"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-purple-500/10 text-purple-400 animate-pulse";
-        b3.textContent = "QUEUED"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-slate-800 text-slate-500";
-      } else if (stage === "phase3_render") {
-        b1.textContent = "DONE"; b1.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
-        b2.textContent = "DONE"; b2.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400";
-        b3.textContent = "RENDERING"; b3.className = "text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-cyan-500/10 text-cyan-400 animate-pulse";
-      }
-    }
-
-    // ── Trigger Ingest ──
-    async function triggerPipeline() {
-      if (!selectedVideo) {
-        alert("Please select a video first!");
-        return;
-      }
-      try {
-        const btn = document.getElementById("generateBtn");
-        btn.disabled = true;
-        btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Starting Pipeline...</span>`;
-        lucide.createIcons();
-
-        const res = await fetch("/api/ingest", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: jsonStringifySafe({ video_name: selectedVideo })
-        });
-        const data = await res.json();
-
-        if (data.status === "success") {
-          currentPipelineStatus = "processing";
-          pipelineStartTime = Date.now() / 1000;
-          estimatedTotalSeconds = data.estimated_time_seconds || 270.0;
-          pollStatus();
-        } else {
-          alert(`Pipeline trigger error: ${data.error}`);
-          btn.disabled = false;
-        }
-      } catch (err) {
-        alert(`Failed to trigger pipeline: ${err}`);
-      }
-    }
-
-    function jsonStringifySafe(obj) {
-      return JSON.stringify(obj);
-    }
-
-    // ── Video Modal ──
-    function openVideoModal(url, title, dur) {
-      const modal = document.getElementById("videoModal");
-      const player = document.getElementById("modalVideoPlayer");
-      const titleEl = document.getElementById("modalVideoTitle");
-      const dlBtn = document.getElementById("modalDownloadBtn");
-
-      titleEl.textContent = title;
-      player.src = url;
-      dlBtn.href = url;
-      modal.classList.remove("hidden");
-      player.play().catch(() => {});
-    }
-
-    function closeVideoModal() {
-      const modal = document.getElementById("videoModal");
-      const player = document.getElementById("modalVideoPlayer");
-      player.pause();
-      player.src = "";
-      modal.classList.add("hidden");
-    }
-
-    function toggleLogs() {
-      const box = document.getElementById("logContainer");
-      const chevron = document.getElementById("logChevron");
-      box.classList.toggle("hidden");
-      chevron.classList.toggle("rotate-180");
-    }
-
-    // ── Operating Mode Switcher ──
-    let currentMode = "review_first";
-
-    async function fetchOperatingMode() {
-      try {
-        const res = await fetch("/api/mode");
-        const data = await res.json();
-        currentMode = data.mode || "review_first";
-        updateModeUI();
-      } catch (err) {
-        console.warn("Could not fetch mode:", err);
-      }
-    }
-
-    async function toggleOperatingMode() {
-      const nextMode = (currentMode === "auto_pilot") ? "review_first" : "auto_pilot";
-      try {
-        const res = await fetch("/api/mode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: nextMode })
-        });
-        const data = await res.json();
-        if (data.status === "success") {
-          currentMode = data.mode;
-          updateModeUI();
-        }
-      } catch (err) {
-        console.error("Failed to toggle mode:", err);
-      }
-    }
-
-    function updateModeUI() {
-      const btn = document.getElementById("modeToggleBtn");
-      const label = document.getElementById("modeLabel");
-      if (!btn || !label) return;
-      if (currentMode === "auto_pilot") {
-        label.textContent = "AUTO-PILOT 24/7";
-        btn.className = "flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20";
-      } else {
-        label.textContent = "REVIEW FIRST";
-        btn.className = "flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer bg-purple-500/10 text-purple-400 border-purple-500/30 hover:bg-purple-500/20";
-      }
-    }
-
-    // ── YouTube Quota Meter ──
-    async function fetchQuota() {
-      try {
-        const res = await fetch("/api/quota");
-        const data = await res.json();
-        const display = document.getElementById("quotaDisplay");
-        if (display && data.daily_budget) {
-          display.textContent = `${data.units_used.toLocaleString()} / ${data.daily_budget.toLocaleString()}`;
-        }
-      } catch (err) {
-        console.warn("Could not fetch quota:", err);
-      }
-    }
-
-    // ── Review Queue ──
-    async function fetchReviewQueue() {
-      try {
-        const res = await fetch("/api/review_queue");
-        const data = await res.json();
-        const container = document.getElementById("reviewQueueGrid");
-        if (!container) return;
-        container.innerHTML = "";
-
-        if (!data.queue || data.queue.length === 0) {
-          container.innerHTML = `<div class="col-span-full p-6 text-center text-slate-500 text-sm bg-slate-900/40 rounded-xl border border-slate-800/60">
-            <i data-lucide="inbox" class="w-8 h-8 mx-auto text-slate-600 mb-2"></i>
-            <span>All certified shorts have been scheduled or published. Review queue is clear.</span>
-          </div>`;
-          lucide.createIcons();
-          return;
-        }
-
-        data.queue.forEach(item => {
-          const card = document.createElement("div");
-          card.className = "p-4 rounded-xl border border-purple-500/30 bg-purple-950/10 hover:border-purple-500/60 transition flex flex-col justify-between";
-          card.innerHTML = `
-            <div>
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs font-bold text-white flex items-center gap-1.5">
-                  <i data-lucide="award" class="w-4 h-4 text-emerald-400"></i>
-                  ${item.title || "Certified Short"}
-                </span>
-                <span class="text-[10px] px-2.5 py-1 rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">QA PASSED</span>
-              </div>
-              <p class="text-xs text-slate-400 mb-3 truncate font-mono">${item.filename || ""}</p>
-            </div>
-            <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
-              <span class="text-[11px] text-amber-400 flex items-center gap-1">
-                <i data-lucide="clock" class="w-3 h-3"></i>
-                <span>Drop: 11:30 AM</span>
-              </span>
-              <button onclick="publishFromQueue('${item.video_path.replace(/\\/g, "/")}', '${(item.title || "Short").replace(/'/g, "\\'")}', '${(item.thumbnail_path || "").replace(/\\/g, "/")}')" class="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer">
-                <i data-lucide="upload" class="w-3.5 h-3.5"></i>
-                <span>Approve & Publish</span>
-              </button>
             </div>
           `;
           container.appendChild(card);
         });
-        lucide.createIcons();
-      } catch (err) {
-        console.warn("Could not fetch review queue:", err);
       }
     }
 
-    async function publishFromQueue(vidPath, title, thumbPath) {
-      if (!confirm(`Confirm approval & YouTube publication for: "${title}"?`)) return;
+    function selectVideo(fname) {
+      selectedVideo = fname;
+      renderVideos();
+      fetchExtractionMemory(fname);
+      showToast(`Selected video: ${fname}`, "info");
+    }
+
+    async function fetchExtractionMemory(vName) {
+      try {
+        const res = await fetch(`/api/extraction_memory?video_name=${encodeURIComponent(vName)}`);
+        const d = await res.json();
+        if (d && d.exists) {
+          document.getElementById("batchCountBadge").innerText = `${d.batches_count} Batches Extracted`;
+          document.getElementById("coverageText").innerText = `${d.coverage_percent}% Extracted (${d.total_shorts_generated} Shorts)`;
+          document.getElementById("coverageBar").style.width = `${d.coverage_percent}%`;
+        } else {
+          document.getElementById("batchCountBadge").innerText = `0 Batches Extracted`;
+          document.getElementById("coverageText").innerText = `0.0% Coverage (0 Shorts)`;
+          document.getElementById("coverageBar").style.width = `0%`;
+        }
+      } catch (e) {}
+    }
+
+    function setBatchCount(cnt) {
+      activeBatchCount = cnt;
+      document.getElementById("btnBatchNum").innerText = cnt;
+      document.querySelectorAll(".batch-chip").forEach(c => {
+        const isThis = parseInt(c.dataset.count) === cnt;
+        c.style.borderColor = isThis ? "var(--accent)" : "var(--border-subtle)";
+        c.style.color = isThis ? "var(--accent)" : "var(--text-muted)";
+      });
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_shorts_count: cnt })
+      });
+      showToast(`Batch target size set to ${cnt} shorts`, "info");
+    }
+
+    async function triggerPipeline() {
+      if (!selectedVideo) {
+        showToast("Please select a video file first", "warn");
+        return;
+      }
+      const btn = document.getElementById("generateBtn");
+      btn.disabled = true;
+      btn.innerHTML = `<span>🚀 PIPELINE RUNNING...</span><span class="btn-icon-circle">⚡</span>`;
+      showToast(`Dispatched extraction of ${activeBatchCount} shorts (${activeFramingMode})`, "success");
+      try {
+        const res = await fetch("/api/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_name: selectedVideo,
+            folder: currentFolder,
+            target_shorts_count: activeBatchCount,
+            framing_mode: activeFramingMode
+          })
+        });
+        const d = await res.json();
+        if (d.status === "error") {
+          showToast(`Ingest error: ${d.error || 'Failed'}`, "error");
+        } else {
+          showToast(`Active processing: ${selectedVideo}`, "success");
+        }
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.innerHTML = `<span>▶ GENERATE BATCH OF <span id="btnBatchNum">${activeBatchCount}</span> SHORTS</span><span class="btn-icon-circle">⚡</span>`;
+        }, 3500);
+      } catch (e) {
+        btn.disabled = false;
+        btn.innerHTML = `<span>▶ GENERATE BATCH OF <span id="btnBatchNum">${activeBatchCount}</span> SHORTS</span><span class="btn-icon-circle">⚡</span>`;
+        showToast("Pipeline dispatch error", "error");
+      }
+    }
+
+    async function fetchShorts() {
+      try {
+        const res = await fetch("/api/shorts");
+        const d = await res.json();
+        shortsList = d.shorts || [];
+        renderShorts(shortsList);
+      } catch (e) {}
+    }
+
+    function renderShorts(items) {
+      const container = document.getElementById("shortsGallery");
+      container.innerHTML = "";
+      if (items.length === 0) {
+        container.innerHTML = `<div style="grid-column: 1/-1; padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px;">No certified 9:16 shorts generated yet.</div>`;
+        return;
+      }
+      items.forEach(s => {
+        const card = document.createElement("div");
+        card.className = "short-card";
+        card.onclick = () => openPlayer(s.video_url, s.title, `${(s.duration_seconds || 55).toFixed(1)}s • ${s.resolution || '1080x1920'}`);
+        card.innerHTML = `
+          <div class="short-thumb-box">
+            ${s.thumbnail_url ? `<img src="${s.thumbnail_url}" alt="${s.title}">` : `<div style="font-size: 12px; color: var(--text-muted);">9:16 Short</div>`}
+            <span style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.85); padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 800;" class="mono">${(s.duration_seconds || 55).toFixed(1)}s</span>
+          </div>
+          <div style="padding: 12px;">
+            <div style="font-weight: 800; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px;">${s.title}</div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
+              <span>Short #${s.clip_index}</span>
+              <span class="mono" style="color: var(--accent);">${s.size_mb || 0} MB</span>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function searchShorts(q) {
+      const filtered = shortsList.filter(s => s.title.toLowerCase().includes(q.toLowerCase()));
+      renderShorts(filtered);
+    }
+
+    function filterCollection(type, btn) {
+      document.querySelectorAll(".collection-filter-btn").forEach(b => {
+        b.style.borderColor = "var(--border-subtle)";
+        b.style.color = "var(--text-muted)";
+      });
+      if (btn) {
+        btn.style.borderColor = "var(--accent)";
+        btn.style.color = "var(--accent)";
+      }
+      if (type === "all") {
+        renderShorts(shortsList);
+        showToast(`Displaying all ${shortsList.length} certified shorts`, "info");
+      } else if (type === "movie") {
+        const baseQuery = (selectedVideo || "").replace(/\.[^/.]+$/, "").toLowerCase();
+        const filtered = shortsList.filter(s => {
+          const t = (s.title || "").toLowerCase();
+          const u = (s.video_url || "").toLowerCase();
+          return (baseQuery && (t.includes(baseQuery) || u.includes(baseQuery))) || t.includes("movie") || t.includes("brand") || t.includes("spider") || u.includes("movie");
+        });
+        renderShorts(filtered.length ? filtered : shortsList);
+        showToast(`Filtered by source: ${filtered.length} shorts`, "info");
+      } else if (type === "review") {
+        const navBtn = document.querySelector('[onclick*="syndicationTab"]');
+        if (navBtn) switchTab("syndicationTab", navBtn);
+        showToast("Switched to Human Review Queue", "info");
+      }
+    }
+
+    function openPlayer(url, title, meta) {
+      document.getElementById("playerTitle").innerText = title;
+      document.getElementById("playerMeta").innerText = meta;
+      document.getElementById("playerDownloadBtn").href = url;
+      const v = document.getElementById("playerVideo");
+      v.src = url;
+      openModal("playerModal");
+      v.play().catch(() => {});
+    }
+
+    async function fetchTelemetry() {
+      try {
+        const res = await fetch("/api/autonomous_telemetry");
+        const d = await res.json();
+
+        // HUD Stats
+        document.getElementById("hudPulseBadge").innerText = d.pulse_status === "PULSE_ACTIVE" ? "⚡ ACTIVE PULSE" : `IDLE (Next in ${Math.round(d.next_pulse_seconds/60)}m)`;
+        document.getElementById("hudVideosCount").innerText = d.total_videos_downloaded || 0;
+        document.getElementById("hudShortsCount").innerText = d.total_shorts_certified || 0;
+
+        // Quota Radial Gauge
+        const qUsed = d.daily_quota_used || 0;
+        document.getElementById("hudQuotaText").innerText = `${qUsed.toLocaleString()} / 10,000 units`;
+        document.getElementById("hudQuotaNum").innerText = `${(qUsed/1000).toFixed(1)}k / 10k`;
+        const qPct = Math.min(100, Math.round((qUsed / 10000) * 100));
+        document.getElementById("hudQuotaBar").style.width = `${qPct}%`;
+        const qRadial = document.getElementById("hudQuotaRadial");
+        if (qRadial) qRadial.setAttribute("stroke-dasharray", `${qPct}, 100`);
+
+        // VRAM Radial Gauge
+        if (d.gpu && d.gpu.available) {
+          document.getElementById("hudVramText").innerText = `VRAM: ${d.gpu.vram_used_gb} / ${d.gpu.vram_total_gb} GB`;
+          document.getElementById("hudTempText").innerText = `Temp: ${d.gpu.temperature_c}°C (SAFE)`;
+          const vUsed = d.gpu.vram_used_gb || 0;
+          const vTotal = d.gpu.vram_total_gb || 16.3;
+          document.getElementById("hudVramNum").innerText = `${vUsed.toFixed(1)} / ${vTotal.toFixed(0)}G`;
+          const vPct = Math.min(100, Math.round((vUsed / vTotal) * 100));
+          const vRadial = document.getElementById("hudVramRadial");
+          if (vRadial) vRadial.setAttribute("stroke-dasharray", `${vPct}, 100`);
+        }
+
+        // Live logs in HUD
+        if (d.recent_logs && d.recent_logs.length) {
+          cachedLogs = d.recent_logs;
+          renderHudLogs();
+        }
+
+        // Live timer updates
+        const sRes = await fetch("/api/status");
+        const s = await sRes.json();
+        document.getElementById("activeStageText").innerText = (s.current_stage || "IDLE").toUpperCase();
+        if (s.elapsed_seconds) {
+          const sec = Math.floor(s.elapsed_seconds);
+          document.getElementById("timerElapsed").innerText = `${String(Math.floor(sec/3600)).padStart(2,'0')}:${String(Math.floor((sec%3600)/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+        }
+        if (s.estimated_remaining_seconds) {
+          const r = Math.floor(s.estimated_remaining_seconds);
+          document.getElementById("timerRemaining").innerText = `${String(Math.floor(r/60)).padStart(2,'0')}:${String(r%60).padStart(2,'0')}`;
+        }
+        if (s.total_clips) {
+          document.getElementById("clipsProgress").innerText = `${s.active_clip_index || 0} / ${s.total_clips}`;
+        }
+      } catch (e) {}
+    }
+
+    async function fetchTrends() {
+      try {
+        const res = await fetch("/api/trends");
+        const d = await res.json();
+        const container = document.getElementById("trendsList");
+        container.innerHTML = "";
+        (d.topics || []).forEach(t => {
+          const el = document.createElement("div");
+          el.className = "stat-tile";
+          el.style.cursor = "pointer";
+          el.onclick = () => selectTrendTopic(t.title);
+          el.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-weight: 800; font-size: 15px;">${t.title}</span>
+              <span class="badge badge-screencast">Safe / Verified</span>
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Volume: ${t.approx_traffic} searches • Click to inspect candidate videos</div>
+          `;
+          container.appendChild(el);
+        });
+      } catch (e) {}
+    }
+
+    async function selectTrendTopic(topic) {
+      const container = document.getElementById("candidateVideosList");
+      container.innerHTML = `<div style="font-size: 13px; color: var(--accent);">Discovering candidate long-form commentary videos for '${topic}'...</div>`;
+      try {
+        const res = await fetch(`/api/trends/candidates?topic=${encodeURIComponent(topic)}`);
+        const d = await res.json();
+        container.innerHTML = "";
+        if (!d.candidates || d.candidates.length === 0) {
+          container.innerHTML = `<div style="font-size: 13px; color: var(--text-muted);">No candidate videos found.</div>`;
+          return;
+        }
+        d.candidates.forEach(c => {
+          const el = document.createElement("div");
+          el.className = "stat-tile";
+          el.innerHTML = `
+            <div style="font-weight: 800; font-size: 14px; margin-bottom: 6px;">${c.title}</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">${Math.round(c.duration/60)}m • ${c.view_count.toLocaleString()} views • ${c.uploader}</div>
+            <button class="btn btn-primary" onclick="downloadCandidate('${c.url}')">⬇ Ingest & Add to Pipeline</button>
+          `;
+          container.appendChild(el);
+        });
+      } catch (e) {
+        container.innerHTML = `<div style="font-size: 13px; color: var(--text-muted);">Error fetching candidate videos.</div>`;
+      }
+    }
+
+    async function downloadCandidate(url) {
+      if (!url) return;
+      showToast(`Initiating background yt-dlp download: ${url}`, "info");
+      try {
+        const res = await fetch("/api/trends/download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_url: url })
+        });
+        const d = await res.json();
+        if (d.status === "error") {
+          showToast(`Download error: ${d.error || 'Failed'}`, "error");
+        } else {
+          showToast("Download started in background. Video will land in data/input_videos", "success");
+        }
+      } catch (e) {
+        showToast("Error requesting video download", "error");
+      }
+    }
+
+    async function downloadDirectYt() {
+      const input = document.getElementById("directYtUrl");
+      const url = input.value.trim();
+      if (!url || !url.startsWith("http")) {
+        showToast("Please enter a valid video URL starting with https://", "warn");
+        return;
+      }
+      await downloadCandidate(url);
+      input.value = "";
+    }
+
+    async function fetchReviewQueue() {
+      try {
+        const res = await fetch("/api/review_queue");
+        const d = await res.json();
+        const container = document.getElementById("reviewQueueList");
+        container.innerHTML = "";
+        const q = d.queue || [];
+        if (q.length === 0) {
+          container.innerHTML = `<div style="color: var(--text-muted); font-size: 13px;">Review queue clear. All certified shorts have been published or dispatched.</div>`;
+          return;
+        }
+        q.forEach(item => {
+          const el = document.createElement("div");
+          el.className = "stat-tile";
+          el.style.display = "flex";
+          el.style.justifyContent = "space-between";
+          el.style.alignItems = "center";
+          el.innerHTML = `
+            <div>
+              <div style="font-weight: 800; font-size: 14px;">${item.title}</div>
+              <div style="font-size: 12px; color: var(--text-muted);">${item.duration_seconds}s • Mode: ${item.framing_mode}</div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn" onclick="inspectSyndication('${item.title}', '${item.video_path}')">📋 View Packaging</button>
+              <button class="btn btn-primary" onclick="publishItem('${item.video_path}', '${item.title}')">🚀 Publish</button>
+            </div>
+          `;
+          container.appendChild(el);
+        });
+      } catch (e) {}
+    }
+
+    async function inspectSyndication(title, vpath) {
+      try {
+        const res = await fetch(`/api/syndication_package?title=${encodeURIComponent(title)}&video_path=${encodeURIComponent(vpath)}`);
+        const d = await res.json();
+        currentSyndicationPkg = d.package;
+        renderSyndicationDisplay();
+      } catch (e) {}
+    }
+
+    function switchSyndicationPlatform(plat) {
+      activeSyndicationPlatform = plat;
+      document.getElementById("tabYtBtn").style.borderColor = (plat === "youtube") ? "var(--accent)" : "var(--border-subtle)";
+      document.getElementById("tabYtBtn").style.color = (plat === "youtube") ? "var(--accent)" : "var(--text-muted)";
+      document.getElementById("tabTtBtn").style.borderColor = (plat === "tiktok") ? "var(--accent)" : "var(--border-subtle)";
+      document.getElementById("tabTtBtn").style.color = (plat === "tiktok") ? "var(--accent)" : "var(--text-muted)";
+      document.getElementById("tabIgBtn").style.borderColor = (plat === "instagram") ? "var(--accent)" : "var(--border-subtle)";
+      document.getElementById("tabIgBtn").style.color = (plat === "instagram") ? "var(--accent)" : "var(--text-muted)";
+      renderSyndicationDisplay();
+    }
+
+    function renderSyndicationDisplay() {
+      if (!currentSyndicationPkg) return;
+      const el = document.getElementById("syndicationDisplay");
+      if (activeSyndicationPlatform === "youtube") {
+        el.innerText = `[YOUTUBE SHORTS METADATA]\nTitle: ${currentSyndicationPkg.youtube.title}\n\nDescription:\n${currentSyndicationPkg.youtube.description}\n\nTags: ${currentSyndicationPkg.youtube.tags.join(", ")}`;
+      } else if (activeSyndicationPlatform === "tiktok") {
+        el.innerText = `[TIKTOK FYP PACKAGING]\nCaption:\n${currentSyndicationPkg.tiktok.caption}`;
+      } else if (activeSyndicationPlatform === "instagram") {
+        el.innerText = `[INSTAGRAM REELS PACKAGING]\nCaption:\n${currentSyndicationPkg.instagram_reels.caption}`;
+      }
+    }
+
+    function copyCurrentSyndication() {
+      const text = document.getElementById("syndicationDisplay").innerText;
+      if (!text || text.includes("Select a short")) {
+        showToast("Please select a short first to inspect packaging", "warn");
+        return;
+      }
+      navigator.clipboard.writeText(text);
+      showToast("Copied platform syndication bundle to clipboard! ✓", "success");
+    }
+
+    function copyField(field) {
+      if (!currentSyndicationPkg) {
+        showToast("Please select a short in the Review Queue first", "warn");
+        return;
+      }
+      let val = "";
+      if (field === "title") val = currentSyndicationPkg.youtube.title;
+      if (field === "caption") {
+        val = activeSyndicationPlatform === "tiktok" ? currentSyndicationPkg.tiktok.caption :
+              activeSyndicationPlatform === "instagram" ? currentSyndicationPkg.instagram_reels.caption :
+              currentSyndicationPkg.youtube.description;
+      }
+      if (field === "tags") val = currentSyndicationPkg.youtube.tags.join(", ");
+
+      if (val) {
+        navigator.clipboard.writeText(val);
+        showToast(`Copied ${field} to clipboard! ✓`, "success");
+      }
+    }
+
+    function showToast(msg, type = "info") {
+      let dock = document.getElementById("toastDock");
+      if (!dock) {
+        dock = document.createElement("div");
+        dock.id = "toastDock";
+        dock.className = "toast-dock";
+        document.body.appendChild(dock);
+      }
+      const item = document.createElement("div");
+      item.className = `toast-item toast-${type}`;
+      let icon = "ℹ️";
+      if (type === "success") icon = "✅";
+      if (type === "error") icon = "❌";
+      if (type === "warn") icon = "⚠️";
+      item.innerHTML = `
+        <span class="toast-icon">${icon}</span>
+        <span class="toast-msg">${msg}</span>
+      `;
+      dock.appendChild(item);
+      setTimeout(() => {
+        item.style.opacity = "0";
+        item.style.transform = "translateX(30px) scale(0.95)";
+        setTimeout(() => item.remove(), 260);
+      }, 3200);
+    }
+
+    async function togglePulseEngine() {
+      try {
+        const res = await fetch("/api/pulse/toggle", { method: "POST" });
+        const d = await res.json();
+        const badge = document.getElementById("hudPulseBadge");
+        if (d.pulse_status === "PULSE_PAUSED") {
+          badge.innerText = "⏸️ PAUSED";
+          badge.style.color = "var(--accent-amber)";
+          showToast("Autonomous pulse engine paused by operator", "warn");
+        } else {
+          badge.innerText = "⚡ ACTIVE PULSE";
+          badge.style.color = "var(--accent-lime)";
+          showToast("Autonomous pulse engine resumed", "success");
+        }
+      } catch (e) {
+        showToast("Error toggling pulse engine", "error");
+      }
+    }
+
+    async function clearHudLogs() {
+      try {
+        await fetch("/api/logs/clear", { method: "POST" });
+        document.getElementById("hudLogStream").innerHTML = `<div style="color: var(--text-muted); font-size: 11px;">[${new Date().toLocaleTimeString()}] Event logs cleared by operator.</div>`;
+        showToast("Event logs buffer cleared", "info");
+      } catch (e) {
+        showToast("Failed to clear logs", "error");
+      }
+    }
+
+    let activeLogLevel = "ALL";
+    let cachedLogs = [];
+
+    function filterHudLogs(level) {
+      activeLogLevel = level;
+      document.querySelectorAll(".log-filter-btn").forEach(btn => {
+        btn.style.borderColor = (btn.dataset.level === level) ? "var(--accent)" : "var(--border-subtle)";
+        btn.style.color = (btn.dataset.level === level) ? "var(--accent)" : "var(--text-muted)";
+      });
+      renderHudLogs();
+    }
+
+    function renderHudLogs() {
+      const box = document.getElementById("hudLogStream");
+      if (!cachedLogs || !cachedLogs.length) {
+        box.innerHTML = `<div style="color: var(--text-muted); font-size: 11px;">No live logs in buffer.</div>`;
+        return;
+      }
+      let filtered = cachedLogs;
+      if (activeLogLevel !== "ALL") {
+        filtered = cachedLogs.filter(l => (l.level || "INFO").toUpperCase() === activeLogLevel);
+      }
+      box.innerHTML = filtered.map(l => {
+        let col = "var(--text-muted)";
+        if (l.level === "SUCCESS") col = "var(--accent-lime)";
+        if (l.level === "WARN") col = "var(--accent-amber)";
+        if (l.level === "ERROR") col = "var(--accent-red)";
+        return `<div><span style="color: var(--text-muted);">[${l.time}]</span> <span style="color: ${col}; font-weight: 700;">${l.message}</span></div>`;
+      }).join("");
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        document.querySelectorAll(".modal-overlay.open").forEach(m => m.classList.remove("open"));
+        const hud = document.getElementById("cockpitWindow");
+        if (hud && hud.classList.contains("open")) hud.classList.remove("open");
+        const player = document.getElementById("playerVideo");
+        if (player) { player.pause(); player.src = ""; }
+      }
+    });
+
+    async function publishItem(vpath, title) {
+      showToast(`Dispatching publication to YouTube: ${title}`, "info");
       try {
         const res = await fetch("/api/publish", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            video_path: vidPath,
-            title: title,
-            thumbnail_path: thumbPath
-          })
+          body: JSON.stringify({ video_path: vpath, title: title })
         });
-        const data = await res.json();
-        if (data.status === "success") {
-          alert(`🎉 Successfully scheduled YouTube publication for "${title}" at ${data.scheduled_time}! (Mode: ${data.mode})`);
-          fetchReviewQueue();
-          fetchQuota();
-          fetchShorts();
+        const d = await res.json();
+        if (d.status === "error") {
+          showToast(`Publish error: ${d.error || 'Failed'}`, "error");
         } else {
-          alert(`Publishing response: ${data.message || data.error || JSON.stringify(data)}`);
+          showToast(`Successfully published: ${title} ✓`, "success");
         }
-      } catch (err) {
-        alert(`Error publishing short: ${err}`);
+        fetchReviewQueue();
+      } catch (e) {
+        showToast("Publication network failure", "error");
       }
     }
 
-    // ── Trending Radar ──
-    async function fetchTrends() {
+    async function fetchAnalytics() {
       try {
-        const res = await fetch("/api/trends");
-        const data = await res.json();
-        const container = document.getElementById("trendsContainer");
-        if (!container) return;
-        container.innerHTML = "";
+        const res = await fetch("/api/analytics");
+        const d = await res.json();
+        const container = document.getElementById("analyticsContent");
+        container.innerHTML = `
+          <div class="stat-tile">
+            <div class="stat-lbl">VIRAL RETENTION THRESHOLDS</div>
+            <div style="margin-top: 10px; font-size: 13px; line-height: 1.8;">
+              <div>Total Processed Shorts: <strong>${d.analytics_summary ? d.analytics_summary.total_records : 0}</strong></div>
+              <div>Graduated Viral Exemplars: <strong>${d.exemplars_count || 0}</strong></div>
+              <div>Retention APV Gate: <strong style="color: var(--accent-lime);">85.0% APV</strong></div>
+            </div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-lbl">FEW-SHOT EDITORIAL PROMPTS GRADUATED</div>
+            <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted);" class="mono">
+              ${d.exemplars && d.exemplars.length ? JSON.stringify(d.exemplars[0], null, 2) : "Complete publications to populate viral retention learner loop."}
+            </div>
+          </div>
+        `;
+      } catch (e) {}
+    }
 
-        if (!data.topics || data.topics.length === 0) {
-          container.innerHTML = `<span class="text-xs text-slate-500">Scan Google Trends to discover rising high-velocity queries.</span>`;
-          return;
-        }
-
-        data.topics.forEach(t => {
-          const pill = document.createElement("div");
-          pill.className = "flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 hover:border-pink-500/40 transition cursor-default";
-          pill.innerHTML = `
-            <span class="w-2 h-2 rounded-full bg-pink-400"></span>
-            <span class="font-medium">${t.title}</span>
-            <span class="text-[10px] font-mono text-pink-400 bg-pink-500/10 px-2.5 py-1 rounded">${t.approx_traffic}</span>
-          `;
-          container.appendChild(pill);
+    async function saveSettings() {
+      const b = parseInt(document.getElementById("cfgBatchSize").value) || 4;
+      const p = document.getElementById("cfgPersona").value;
+      const l = document.getElementById("cfgLanguage").value;
+      const d = parseFloat(document.getElementById("cfgDucking").value) || -18;
+      try {
+        await fetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target_shorts_count: b,
+            vlm_persona: p,
+            whisper_language: l,
+            bgm_ducking_db: d
+          })
         });
-      } catch (err) {
-        console.warn("Could not fetch trends:", err);
+        setBatchCount(b);
+        closeModal("settingsModal");
+        showToast("Studio configuration saved successfully ✓", "success");
+      } catch (e) {
+        showToast("Error saving studio configuration", "error");
       }
     }
   </script>

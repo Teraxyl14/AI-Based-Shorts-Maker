@@ -22,6 +22,8 @@ data/input_videos/*
 data/output_shorts/*
 data/nats_store/
 data/*.json
+data/auth/
+data/Sample Shorts/
 !data/input_videos/.gitkeep
 !data/output_shorts/.gitkeep
 

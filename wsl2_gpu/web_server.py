@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import logging
 import mimetypes
 import subprocess
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -77,6 +78,65 @@ def probe_video(path: str) -> dict:
         "width": 0,
         "height": 0,
         "codec": "unknown"
+    }
+
+def classify_video_content(probe: dict, filename: str = "") -> dict:
+    """
+    Smart Content Profiler: Evaluates duration, aspect ratio, resolution, and filename
+    to automatically classify the video's genre and narrative structure.
+    """
+    dur = probe.get("duration", 0.0)
+    w = probe.get("width", 0)
+    h = probe.get("height", 0)
+    aspect = (w / h) if (w > 0 and h > 0) else 1.777
+    fn_lower = filename.lower()
+
+    # 1. Feature Movie / Cinematic Drama: Long duration (>= 45 min)
+    if dur >= 2700.0 or "movie" in fn_lower or "film" in fn_lower:
+        return {
+            "type": "FEATURE_MOVIE",
+            "icon": "🎬",
+            "label": "Feature Film / Movie",
+            "description": f"Cinematic narrative ({round(dur / 60, 1)}m) • Multi-batch capable (30+ potential shorts)",
+            "recommended_persona": "CINEMATIC_DRAMA"
+        }
+
+    # 2. Tech Screencast / Software Demo
+    if "tutorial" in fn_lower or "demo" in fn_lower or "screen" in fn_lower or "code" in fn_lower:
+        return {
+            "type": "TECH_SCREENCAST",
+            "icon": "💻",
+            "label": "Tech Screencast / Demo",
+            "description": "Software UI demonstration & technical walk-through",
+            "recommended_persona": "TECH_DEMO"
+        }
+
+    # 3. Podcast / Dialogue Interview (15 min - 45 min)
+    if 900.0 <= dur < 2700.0 or "podcast" in fn_lower or "interview" in fn_lower or "talk" in fn_lower:
+        return {
+            "type": "PODCAST_INTERVIEW",
+            "icon": "🎙️",
+            "label": "Podcast / Interview",
+            "description": f"Multi-speaker conversational dialogue ({round(dur / 60, 1)}m)",
+            "recommended_persona": "FAST_PACED"
+        }
+
+    # 4. Short-Form or Medium Video
+    if dur < 900.0:
+        return {
+            "type": "SHORT_SEGMENT",
+            "icon": "⚡",
+            "label": "Clip / Highlight",
+            "description": f"Short segment ({round(dur / 60, 1)}m) • Ideal for 1-4 high-hook shorts",
+            "recommended_persona": "VIRAL_HOOK"
+        }
+
+    return {
+        "type": "GENERAL_VIDEO",
+        "icon": "📹",
+        "label": "General Video",
+        "description": f"Standard media ({round(dur / 60, 1)}m)",
+        "recommended_persona": "VIRAL_HOOK"
     }
 
 def get_gpu_telemetry() -> dict:
@@ -197,20 +257,99 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
             self._send_json(payload)
             return
 
-        # ── Route 3: GET /api/videos ──
+        # ── Route 3: GET /api/videos (Dynamic Directory Browser & Smart Classifier) ──
         if path == "/api/videos":
+            q_params = parse_qs(parsed.query)
+            target_folder = q_params.get("folder", [INPUT_VIDEOS_DIR])[0].strip()
+
+            # Path sanitization: resolve and verify directory exists
+            try:
+                real_dir = os.path.abspath(os.path.realpath(target_folder)) if target_folder else INPUT_VIDEOS_DIR
+                if not os.path.exists(real_dir) or not os.path.isdir(real_dir):
+                    real_dir = INPUT_VIDEOS_DIR
+            except Exception:
+                real_dir = INPUT_VIDEOS_DIR
+
             videos = []
+            if os.path.exists(real_dir):
+                try:
+                    for f in sorted(os.listdir(real_dir)):
+                        # Ignore partial / temporary download files
+                        if f.endswith((".part", ".ytdl", ".tmp", ".temp")):
+                            continue
+                        if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi")):
+                            full_p = os.path.join(real_dir, f)
+                            try:
+                                meta = probe_video(full_p)
+                                profile = classify_video_content(meta, filename=f)
+                                mtime = os.path.getmtime(full_p)
+                                videos.append({
+                                    "filename": f,
+                                    "path": full_p,
+                                    "modified_at": mtime,
+                                    "content_profile": profile,
+                                    **meta
+                                })
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logging.getLogger("AetherWebServer").warning(f"Error scanning directory {real_dir}: {e}")
+
+            self._send_json({
+                "videos": videos,
+                "count": len(videos),
+                "folder": real_dir,
+                "is_default_folder": (real_dir == INPUT_VIDEOS_DIR)
+            })
+            return
+
+        # ── Route: GET /api/autonomous_telemetry (Cockpit Telemetry Hub) ──
+        if path == "/api/autonomous_telemetry":
+            now = time.time()
+            gpu_data = get_gpu_telemetry()
+
+            # Calculate metrics
+            h_file = os.path.join(DATA_DIR, "publication_history.json")
+            history = []
+            if os.path.exists(h_file):
+                try:
+                    with open(h_file, "r", encoding="utf-8") as f:
+                        history = json.load(f)
+                except Exception:
+                    pass
+
+            day_cutoff = now - 86400.0
+            day_pubs = [p for p in history if p.get("timestamp", 0.0) >= day_cutoff]
+            units_used = sum(p.get("quota_units_used", 1600) for p in day_pubs)
+
+            # Count total certified shorts
+            total_shorts_certified = 0
+            if os.path.exists(OUTPUT_SHORTS_DIR):
+                for hash_dir in os.listdir(OUTPUT_SHORTS_DIR):
+                    p = os.path.join(OUTPUT_SHORTS_DIR, hash_dir)
+                    if os.path.isdir(p):
+                        total_shorts_certified += len([f for f in os.listdir(p) if f.startswith("short_") and f.endswith(".mp4")])
+
+            # Count downloaded source videos
+            total_videos_count = 0
             if os.path.exists(INPUT_VIDEOS_DIR):
-                for f in sorted(os.listdir(INPUT_VIDEOS_DIR)):
-                    if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi")):
-                        full_p = os.path.join(INPUT_VIDEOS_DIR, f)
-                        meta = probe_video(full_p)
-                        videos.append({
-                            "filename": f,
-                            "path": full_p,
-                            **meta
-                        })
-            self._send_json({"videos": videos, "count": len(videos)})
+                total_videos_count = len([f for f in os.listdir(INPUT_VIDEOS_DIR) if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi"))])
+
+            self._send_json({
+                "pulse_status": "PULSE_IDLE",
+                "next_pulse_seconds": max(0, int(1800.0 - (now % 1800.0))),
+                "total_videos_downloaded": total_videos_count,
+                "total_shorts_certified": total_shorts_certified,
+                "total_shorts_published": len(history),
+                "daily_uploads_count": len(day_pubs),
+                "daily_quota_used": units_used,
+                "daily_quota_max": 10000,
+                "operating_mode": LIVE_STATE.get("operating_mode", "review_first"),
+                "pipeline_stage": LIVE_STATE.get("current_stage", "idle"),
+                "active_video": LIVE_STATE.get("active_video_name", None),
+                "gpu": gpu_data,
+                "recent_logs": LIVE_STATE.get("recent_logs", [])[-10:]
+            })
             return
 
         # ── Route 4: GET /api/shorts ──
@@ -330,6 +469,30 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"topics": [], "error": str(e)}, 200)
             return
 
+        # ── Route: GET /api/trends/candidates ──
+        if path == "/api/trends/candidates":
+            try:
+                from wsl2_gpu.trending_spoke import search_candidate_videos_for_topic
+                q_params = parse_qs(parsed.query)
+                topic = q_params.get("topic", [""])[0]
+                candidates = search_candidate_videos_for_topic(topic, max_results=3) if topic else []
+                self._send_json({"candidates": candidates, "topic": topic})
+            except Exception as e:
+                self._send_json({"candidates": [], "error": str(e)}, 200)
+            return
+
+        # ── Route: GET /api/syndication_package ──
+        if path == "/api/syndication_package":
+            try:
+                from wsl2_gpu.publisher_spoke import generate_syndication_package
+                q_params = parse_qs(parsed.query)
+                title = q_params.get("title", ["Cinematic Short"])[0]
+                pkg = generate_syndication_package(raw_title=title)
+                self._send_json({"status": "success", "package": pkg})
+            except Exception as e:
+                self._send_json({"status": "error", "error": str(e)}, 500)
+            return
+
         # ── Route 9: GET /api/analytics (Closed-Loop Retention Memory & Exemplars) ──
         if path == "/api/analytics":
             try:
@@ -352,7 +515,52 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
             return
 
-        # ── Route 10: GET /api/media/{hash}/{file} (HTTP Range Video Streaming) ──
+        # ── Route 10: GET /api/config (Platform User Configuration) ──
+        if path == "/api/config":
+            config_file = os.path.join(DATA_DIR, "app_config.json")
+            default_config = {
+                "target_shorts_count": 4,
+                "min_duration": 50.0,
+                "max_duration": 60.0,
+                "vlm_persona": "VIRAL_HOOK",
+                "whisper_language": "auto",
+                "bgm_track": "none",
+                "bgm_ducking_db": -18.0,
+                "theme": "dark",
+                "operating_mode": "review_first",
+                "daily_quota_limit": 4
+            }
+            if os.path.exists(config_file):
+                try:
+                    with open(config_file, "r", encoding="utf-8") as cf:
+                        loaded = json.load(cf)
+                        default_config.update(loaded)
+                except Exception:
+                    pass
+            self._send_json(default_config)
+            return
+
+        # ── Route 11: GET /api/extraction_memory (Timeline Coverage & Past Batches) ──
+        if path.startswith("/api/extraction_memory"):
+            query = parse_qs(parsed.query)
+            video_name = query.get("video_name", [None])[0]
+            video_hash = query.get("hash", [None])[0]
+
+            from wsl2_gpu.extraction_memory import get_video_extraction_summary
+            target_path = None
+            if video_name:
+                target_path = os.path.join(INPUT_VIDEOS_DIR, video_name)
+            elif video_hash:
+                target_path = video_hash
+
+            if target_path:
+                summary = get_video_extraction_summary(target_path)
+                self._send_json(summary)
+            else:
+                self._send_json({"error": "Missing video_name or hash parameter"}, 400)
+            return
+
+        # ── Route 12: GET /api/media/{hash}/{file} (HTTP Range Video Streaming) ──
         if path.startswith("/api/media/"):
             rel_path = path[len("/api/media/"):].strip("/")
             full_media_path = os.path.normpath(os.path.join(OUTPUT_SHORTS_DIR, rel_path))
@@ -379,41 +587,122 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # ── Route: POST /api/config (Update Platform User Configuration) ──
+        if path == "/api/config":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
+                data = json.loads(body)
+
+                config_file = os.path.join(DATA_DIR, "app_config.json")
+                current_config = {
+                    "target_shorts_count": 4,
+                    "min_duration": 50.0,
+                    "max_duration": 60.0,
+                    "vlm_persona": "VIRAL_HOOK",
+                    "whisper_language": "auto",
+                    "bgm_track": "none",
+                    "bgm_ducking_db": -18.0,
+                    "theme": "dark",
+                    "operating_mode": "review_first",
+                    "daily_quota_limit": 4
+                }
+                if os.path.exists(config_file):
+                    try:
+                        with open(config_file, "r", encoding="utf-8") as cf:
+                            current_config.update(json.load(cf))
+                    except Exception:
+                        pass
+
+                current_config.update(data)
+                os.makedirs(DATA_DIR, exist_ok=True)
+                with open(config_file, "w", encoding="utf-8") as cf:
+                    json.dump(current_config, cf, indent=2)
+
+                # Sync live state
+                if "operating_mode" in data:
+                    LIVE_STATE["operating_mode"] = data["operating_mode"]
+                if "target_shorts_count" in data:
+                    LIVE_STATE["total_clips"] = int(data["target_shorts_count"])
+                    os.environ["AETHER_TARGET_SHORTS"] = str(data["target_shorts_count"])
+
+                self._send_json({"status": "success", "config": current_config})
+            except Exception as e:
+                self._send_json({"status": "error", "error": str(e)}, 500)
+            return
+
         if path == "/api/ingest":
             try:
                 content_len = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
                 data = json.loads(body)
                 video_name = data.get("video_name")
+                folder = data.get("folder")
+                target_count = int(data.get("target_shorts_count", 4))
+                framing_mode = str(data.get("framing_mode", "CINEMATIC_3ZONE_916"))
+                os.environ["AETHER_TARGET_SHORTS"] = str(target_count)
+                os.environ["AETHER_FRAMING_MODE"] = framing_mode
 
                 if not video_name:
                     self._send_json({"status": "error", "error": "Missing video_name parameter"}, 400)
                     return
 
-                video_path = os.path.join(INPUT_VIDEOS_DIR, video_name)
+                # Resolve video path across custom folder or default input directory
+                if folder and os.path.exists(os.path.join(folder, video_name)):
+                    video_path = os.path.join(folder, video_name)
+                elif os.path.exists(video_name):
+                    video_path = video_name
+                else:
+                    video_path = os.path.join(INPUT_VIDEOS_DIR, video_name)
+
                 if not os.path.exists(video_path):
                     self._send_json({"status": "error", "error": f"Video not found: {video_name}"}, 404)
                     return
 
+                # Smart Content Profile Auto-Binding
+                meta = probe_video(video_path)
+                profile = classify_video_content(meta, filename=os.path.basename(video_path))
+                os.environ["AETHER_CONTENT_PROFILE"] = profile.get("type", "GENERAL_VIDEO")
+                if "recommended_persona" in profile:
+                    os.environ["AETHER_VLM_PERSONA"] = profile["recommended_persona"]
+
+                # Ensure video is accessible to container (copy/link if outside INPUT_VIDEOS_DIR)
+                dest_in_mount = os.path.join(INPUT_VIDEOS_DIR, os.path.basename(video_path))
+                if not os.path.exists(dest_in_mount) and os.path.abspath(video_path) != os.path.abspath(dest_in_mount):
+                    try:
+                        import shutil
+                        shutil.copy2(video_path, dest_in_mount)
+                    except Exception as ce:
+                        logging.getLogger("AetherWebServer").warning(f"Could not copy external video to mount: {ce}")
+
+                canonical_name = os.path.basename(dest_in_mount)
+
                 # Update live state
                 LIVE_STATE["status"] = "processing"
-                LIVE_STATE["active_video"] = video_path
-                LIVE_STATE["active_video_name"] = video_name
+                LIVE_STATE["active_video"] = dest_in_mount
+                LIVE_STATE["active_video_name"] = canonical_name
+                LIVE_STATE["content_profile"] = profile
+                LIVE_STATE["total_clips"] = target_count
                 LIVE_STATE["current_stage"] = "phase1_asr"
                 LIVE_STATE["pipeline_start_time"] = time.time()
                 LIVE_STATE["stage_start_time"] = time.time()
                 LIVE_STATE["elapsed_seconds"] = 0.0
-                LIVE_STATE["estimated_remaining_seconds"] = 270.0
+                LIVE_STATE["estimated_remaining_seconds"] = max(180.0, target_count * 45.0)
                 LIVE_STATE["recent_logs"].append({
                     "time": time.strftime("%H:%M:%S"),
                     "level": "INFO",
-                    "message": f"🚀 Pipeline triggered for: {video_name}"
+                    "message": f"🚀 Pipeline started for {canonical_name} ({profile['label']} • Target: {target_count} shorts)"
                 })
 
-                # Trigger pipeline through docker exec or nats trigger
+                # Trigger pipeline through docker exec or nats trigger with target_shorts parameter
                 cmd = [
-                    "docker", "exec", "-d", "aether-orchestrator",
-                    "python3", "wsl2_gpu/trigger_ingest.py", f"/data/input_videos/{video_name}"
+                    "docker", "exec", "-d",
+                    "-e", f"AETHER_TARGET_SHORTS={target_count}",
+                    "-e", f"AETHER_CONTENT_PROFILE={profile.get('type', 'GENERAL_VIDEO')}",
+                    "-e", f"AETHER_VLM_PERSONA={profile.get('recommended_persona', 'VIRAL_HOOK')}",
+                    "-e", f"AETHER_FRAMING_MODE={framing_mode}",
+                    "aether-orchestrator",
+                    "python3", "wsl2_gpu/trigger_ingest.py", f"/data/input_videos/{canonical_name}", str(target_count)
                 ]
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -481,6 +770,86 @@ class AetherDashboardHandler(BaseHTTPRequestHandler):
                         pass
 
                 self._send_json(pub_res)
+            except Exception as e:
+                self._send_json({"status": "error", "error": str(e)}, 500)
+            return
+
+        # ── Route: POST /api/pulse/toggle ──
+        if path == "/api/pulse/toggle":
+            try:
+                cur_status = LIVE_STATE.get("pulse_status", "PULSE_IDLE")
+                if cur_status == "PULSE_PAUSED":
+                    LIVE_STATE["pulse_status"] = "PULSE_IDLE"
+                    LIVE_STATE["recent_logs"].append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "level": "INFO",
+                        "message": "⚡ Autonomous pulse engine resumed."
+                    })
+                else:
+                    LIVE_STATE["pulse_status"] = "PULSE_PAUSED"
+                    LIVE_STATE["recent_logs"].append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "level": "WARN",
+                        "message": "⏸️ Autonomous pulse engine paused by operator."
+                    })
+                self._send_json({"status": "success", "pulse_status": LIVE_STATE["pulse_status"]})
+            except Exception as e:
+                self._send_json({"status": "error", "error": str(e)}, 500)
+            return
+
+        # ── Route: POST /api/logs/clear ──
+        if path == "/api/logs/clear":
+            try:
+                LIVE_STATE["recent_logs"] = [{
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "INFO",
+                    "message": "Event logs cleared by operator."
+                }]
+                self._send_json({"status": "success", "message": "Logs cleared"})
+            except Exception as e:
+                self._send_json({"status": "error", "error": str(e)}, 500)
+            return
+
+        # ── Route: POST /api/trends/download ──
+        if path == "/api/trends/download":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
+                data = json.loads(body)
+                video_url = data.get("video_url")
+                if not video_url:
+                    self._send_json({"status": "error", "error": "Missing video_url"}, 400)
+                    return
+
+                LIVE_STATE["recent_logs"].append({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "INFO",
+                    "message": f"⬇️ Initiating download: {video_url}"
+                })
+
+                from wsl2_gpu.trending_spoke import download_candidate_video
+                import threading
+                def _bg_download():
+                    try:
+                        fpath = download_candidate_video(video_url, output_dir=INPUT_VIDEOS_DIR)
+                        if fpath and os.path.exists(fpath):
+                            fname = os.path.basename(fpath)
+                            LIVE_STATE["recent_logs"].append({
+                                "time": time.strftime("%H:%M:%S"),
+                                "level": "SUCCESS",
+                                "message": f"✅ Downloaded and registered: {fname}"
+                            })
+                            LIVE_STATE["total_videos_downloaded"] = LIVE_STATE.get("total_videos_downloaded", 0) + 1
+                    except Exception as err:
+                        logging.getLogger("AetherWebServer").error(f"Background download failed: {err}")
+                        LIVE_STATE["recent_logs"].append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "level": "WARN",
+                            "message": f"⚠️ Download failed: {err}"
+                        })
+
+                threading.Thread(target=_bg_download, daemon=True).start()
+                self._send_json({"status": "downloading", "message": f"Started download for {video_url}"})
             except Exception as e:
                 self._send_json({"status": "error", "error": str(e)}, 500)
             return

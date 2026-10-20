@@ -41,6 +41,10 @@ from wsl2_gpu.vram_orchestrator import (
     run_phase2_vlm_editorial_worker,
     run_phase3_render_worker,
 )
+from wsl2_gpu.extraction_memory import (
+    get_excluded_intervals,
+    is_interval_excluded,
+)
 
 logger = logging.getLogger("AetherOrchestrator")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -185,6 +189,8 @@ class Orchestrator:
         try:
             payload = json.loads(msg.data.decode("utf-8"))
             source_path = payload.get("source_path")
+            target_count = int(payload.get("target_shorts_count") or os.environ.get("AETHER_TARGET_SHORTS", 4))
+            os.environ["AETHER_TARGET_SHORTS"] = str(target_count)
 
             if not source_path or not os.path.exists(source_path):
                 logger.error(f"Ingested file not found: {source_path}. Skipping.")
@@ -282,10 +288,10 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"Could not publish vision metadata to NATS (non-fatal): {e}")
 
-            if len(editorial_shorts) < 4:
-                needed = 4 - len(editorial_shorts)
-                logger.warning(f"Only {len(editorial_shorts)}/4 editorial shorts available. Topping up {needed} fallback shorts.")
-                fallback_shorts = self._generate_fallback_shorts(video_duration, existing=editorial_shorts, needed=needed)
+            if len(editorial_shorts) < target_count:
+                needed = target_count - len(editorial_shorts)
+                logger.warning(f"Only {len(editorial_shorts)}/{target_count} editorial shorts available. Topping up {needed} fallback shorts.")
+                fallback_shorts = self._generate_fallback_shorts(video_duration, existing=editorial_shorts, needed=needed, source_path=source_path)
                 editorial_shorts.extend(fallback_shorts)
 
             # ═════════════════════════════════════════════════════════════════
@@ -392,17 +398,24 @@ class Orchestrator:
 
     def _generate_fallback_shorts(self, video_duration: float,
                                   existing: Optional[List[Dict[str, Any]]] = None,
-                                  needed: int = 4) -> List[Dict[str, Any]]:
-        """Generates fallback editorial shorts to guarantee at least 4 shorts (50.0s-60.0s each)."""
+                                  needed: int = 4,
+                                  source_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Generates fallback editorial shorts to guarantee at least `needed` shorts (50.0s-60.0s each),
+        strictly avoiding previously extracted intervals for multi-batch continuity.
+        """
         existing = existing or []
         shorts = []
         start = 60.0
         avail_end = max(start, video_duration - 1.0)
         target_dur = 55.0 if (avail_end - start) >= (needed * 55.0) else max(50.0, min(60.0, (avail_end - start) / float(max(1, needed))))
-        slots = max(needed, int((avail_end - start) / target_dur))
+        slots = max(needed * 2, int((avail_end - start) / target_dur))
         step = (avail_end - start - target_dur) / max(1, slots - 1) if slots > 1 else 0.0
 
+        excluded_intervals = get_excluded_intervals(source_path) if source_path else []
+
         def collides(s_s: float, s_e: float) -> bool:
+            if excluded_intervals and is_interval_excluded(s_s, s_e, excluded_intervals):
+                return True
             for ex in existing + shorts:
                 if s_s < ex.get("end_time_seconds", 0) and s_e > ex.get("start_time_seconds", 0):
                     return True
