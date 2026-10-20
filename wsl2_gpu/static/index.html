@@ -169,6 +169,28 @@
       font-weight: 800;
       letter-spacing: 0.05em;
     }
+    .system-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--accent-green);
+      padding: 4px 10px;
+      border-radius: 9999px;
+    }
+    .status-pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+      animation: statusPulse 2s ease-in-out infinite;
+    }
+    @keyframes statusPulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
     .actions-bar { display: flex; align-items: center; gap: 10px; }
     .btn {
       background: var(--panel);
@@ -235,31 +257,39 @@
     }
     .nav-tabs {
       display: flex;
-      gap: 10px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 10px;
+      gap: 6px;
+      background: var(--card-outer);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 5px;
+      margin-bottom: 24px;
       overflow-x: auto;
     }
     .nav-tab {
       background: transparent;
-      border: none;
+      border: 1px solid transparent;
       color: var(--text-muted);
-      font-size: 14px;
-      font-weight: 700;
-      padding: 10px 18px;
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 9px 18px;
       border-radius: 8px;
       cursor: pointer;
       display: flex;
       align-items: center;
       gap: 8px;
-      transition: all 0.15s;
+      transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+      white-space: nowrap;
     }
-    .nav-tab:hover { color: var(--text); background: var(--panel); }
+    .nav-tab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
     .nav-tab.active {
-      background: var(--card);
-      color: var(--accent);
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
+      background: var(--card-inner);
+      color: var(--text);
+      border-color: var(--border);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      font-weight: 700;
     }
     .section-block {
       display: flex;
@@ -447,7 +477,11 @@
     <div class="header-content">
       <div class="brand-mark">
         <span class="brand-badge">AETHER</span>
-        <span>Tronium Content Studio</span>
+        <span style="font-weight: 800; font-size: 16px; letter-spacing: -0.02em;">Tronium Content Studio</span>
+        <div class="system-status-pill">
+          <span class="status-pulse-dot"></span>
+          <span class="mono" style="font-size: 11px; font-weight: 700;">RTX 5080 ONLINE // 16GB</span>
+        </div>
       </div>
       <div class="actions-bar">
         <button class="btn" id="cockpitToggleBtn" onclick="toggleCockpit()">
@@ -1790,5 +1824,21 @@ Select a short in the Review Queue or Gallery to view its multi-platform packagi
       }
     }
   </script>
+
+  <!-- Industrial Studio Command Deck Footer -->
+  <footer class="studio-footer" style="max-width: 1320px; margin: 56px auto 0 auto; padding: 24px; border-top: 1px solid var(--border-subtle); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; font-size: 12px; color: var(--text-muted);">
+    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <span class="mono" style="font-weight: 700; color: var(--text);">PROJECT AETHER STUDIO // v3.4.0</span>
+      <span>•</span>
+      <span>Dual Hardware NVENC Acceleration</span>
+      <span>•</span>
+      <span style="color: var(--accent-lime); font-weight: 600;">100% Local Gitignored Isolation</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px;" class="mono">
+      <span>Shortcuts: <kbd style="background: var(--panel); border: 1px solid var(--border-subtle); padding: 2px 6px; border-radius: 4px; font-size: 11px;">Esc</kbd> Dismiss</span>
+      <span>•</span>
+      <span><kbd style="background: var(--panel); border: 1px solid var(--border-subtle); padding: 2px 6px; border-radius: 4px; font-size: 11px;">Tab</kbd> Focus</span>
+    </div>
+  </footer>
 </body>
 </html>
